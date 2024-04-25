@@ -10,6 +10,7 @@ USER_TARGETS_OBJS := common_params.o common_user_bpf_xdp.o
 USER_TARGETS_OBJS += hashmap.o lib_xsk_extend.o
 # USER_TARGETS_OBJS += lib_xsk_extend.o
 USER_TARGETS_OBJS += ethtool_utils.o
+USER_TARGETS_OBJS += rule.o
 
 # The USER_TARGETS_OBJS have a dependency of this header file
 USER_TARGETS_OBJS_DEPS += common_defines.h
