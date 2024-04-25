@@ -53,7 +53,7 @@ LDFLAGS += -L$(LIB_DIR)/install/lib
 
 BPF_HEADERS := $(wildcard $(HEADER_DIR)/*/*.h) $(wildcard $(INCLUDE_DIR)/*/*.h)
 
-all: $(USER_TARGETS) $(BPF_OBJ) $(EXTRA_TARGETS) $(BPF_SKEL)
+all: $(USER_TARGETS) $(BPF_OBJ) $(EXTRA_TARGETS) $(BPF_SKEL) str2dfa.o
 
 .PHONY: clean
 clean::
@@ -82,6 +82,12 @@ $(USER_TARGETS_OBJS): %.o: %.c %.h  $(USER_TARGETS_OBJS_DEPS)
 $(USER_TARGETS): %: %.c  $(OBJECT_LIBBPF) $(OBJECT_LIBXDP) $(LIBMK) $(LIB_OBJS) $(KERN_USER_H) $(EXTRA_DEPS) $(EXTRA_USER_DEPS) $(BPF_SKEL) $(USER_TARGETS_OBJS)
 	$(QUIET_CC)$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(LIB_OBJS) $(USER_TARGETS_OBJS) \
 	 $< $(LDLIBS)
+
+SPEC_FLAGS ?= -I/usr/include/python3.10
+SPEC_LIBS ?= -lpython3.10
+
+str2dfa.o: str2dfa.c str2dfa.h str2dfa.py
+	$(CC) $(SPEC_FLAGS) $< -c -o $@ $(SPEC_LIBS)
 
 $(BPF_OBJ): %.o: %.c $(KERN_USER_H) $(EXTRA_DEPS) $(BPF_HEADERS) $(LIBMK)
 	$(QUIET_CLANG)$(CLANG) -S \
