@@ -607,101 +607,6 @@ static inline void csum_replace2(__sum16 *sum, __be16 old, __be16 new)
 }
 
 /**
- * Packet fill helpers
- */
-static uint8_t base_pkt_data[FRAME_SIZE];
-
-/* Can be changed via cmdline options (-G|--tx-dmac) or (-H|--tx-smac) */
-static struct ether_addr default_tx_smac = {{ 0x24, 0x5e, 0xbe, 0x57, 0xf1, 0x64 }};
-static struct ether_addr default_tx_dmac = {{ 0xbc, 0xee, 0x7b, 0xda, 0xc2, 0x62 }};
-
-#define MIN_PKT_SIZE 64
-static uint16_t opt_pkt_size = MIN_PKT_SIZE;
-
-#define PKT_HDR_SIZE (sizeof(struct ethhdr) + sizeof(struct iphdr) + \
-		      sizeof(struct udphdr))
-
-#define ETH_FCS_SIZE 4
-#define PKT_SIZE		(opt_pkt_size - ETH_FCS_SIZE)
-#define IP_PKT_SIZE		(PKT_SIZE - sizeof(struct ethhdr))
-#define UDP_PKT_SIZE		(IP_PKT_SIZE - sizeof(struct iphdr))
-#define UDP_PKT_DATA_SIZE	(UDP_PKT_SIZE - sizeof(struct udphdr))
-
-static void gen_eth_hdr(struct config *cfg, struct ethhdr *eth_hdr)
-{
-	/* Ethernet header:
-	 *  Can be changed via cmdline options (-G|--tx-dmac) or (-H|--tx-smac)
-	 */
-	memcpy(eth_hdr->h_dest  , &cfg->opt_tx_dmac, ETH_ALEN);
-	memcpy(eth_hdr->h_source, &cfg->opt_tx_smac, ETH_ALEN);
-	eth_hdr->h_proto = htons(ETH_P_IP);
-}
-
-
-static char *opt_ip_str_src = "192.168.44.1";
-static char *opt_ip_str_dst = "192.168.44.3";
-
-static void gen_ip_hdr(struct config *cfg, struct iphdr *ip_hdr)
-{
-	if (cfg->opt_ip_src == 0)
-		get_ipv4_u32(opt_ip_str_src, &cfg->opt_ip_src);
-
-	if (cfg->opt_ip_dst == 0)
-		get_ipv4_u32(opt_ip_str_dst, &cfg->opt_ip_dst);
-
-	/* IP header */
-	ip_hdr->version = IPVERSION;
-	ip_hdr->ihl = 0x5; /* 20 byte header */
-	ip_hdr->tos = 0x0;
-	ip_hdr->tot_len = htons(IP_PKT_SIZE);
-	ip_hdr->id = 0;
-	ip_hdr->frag_off = 0;
-	ip_hdr->ttl = IPDEFTTL;
-	ip_hdr->protocol = IPPROTO_UDP;
-	ip_hdr->saddr = cfg->opt_ip_src;
-	ip_hdr->daddr = cfg->opt_ip_dst;
-
-	/* IP header checksum */
-	ip_hdr->check = 0;
-	ip_hdr->check = ip_fast_csum((const void *)ip_hdr, ip_hdr->ihl);
-}
-
-static uint32_t opt_pkt_fill_pattern = 0x41424344;
-
-static void gen_udp_hdr(struct udphdr *udp_hdr, struct iphdr *ip_hdr)
-{
-	/* UDP header */
-	udp_hdr->source = htons(0x1000);
-	udp_hdr->dest = htons(0x1000);
-	udp_hdr->len = htons(UDP_PKT_SIZE);
-
-	/* UDP data */
-	memset32_htonl((void*)udp_hdr + sizeof(struct udphdr),
-		       opt_pkt_fill_pattern,
-		       UDP_PKT_DATA_SIZE);
-
-	/* UDP header checksum */
-	udp_hdr->check = 0;
-	udp_hdr->check = udp_csum(ip_hdr->saddr, ip_hdr->daddr, UDP_PKT_SIZE,
-				  IPPROTO_UDP, (__u16 *)udp_hdr);
-}
-
-static void gen_base_pkt(struct config *cfg, uint8_t *pkt_ptr)
-{
-	struct ethhdr *eth_hdr = (struct ethhdr *)pkt_ptr;
-	struct iphdr *ip_hdr = (struct iphdr *)(pkt_ptr +
-						sizeof(struct ethhdr));
-	struct udphdr *udp_hdr = (struct udphdr *)(pkt_ptr +
-						   sizeof(struct ethhdr) +
-						   sizeof(struct iphdr));
-
-	gen_eth_hdr(cfg, eth_hdr);
-	gen_ip_hdr(cfg, ip_hdr);
-	gen_udp_hdr(udp_hdr, ip_hdr);
-}
-
-
-/**
  * BTF accessing XDP-hints
  * -----------------------
  * Accessing the XDP-hints via BTF requires setup done earlier.  As our target
@@ -765,39 +670,6 @@ static int print_meta_info_time(uint8_t *pkt, struct xdp_hints_rx_time *meta,
 	return 0;
 }
 
-/* Demo API xsk_btf__read_field() that use string for BTF lookup */
-static int print_meta_info_time_api2(uint8_t *pkt, __u32 qid)
-{
-	struct xsk_btf_info *xbi = xdp_hints_rx_time.xbi;
-	__u64 time_now; // = gettime();
-	__u64 *rx_ktime_ptr; /* Points directly to member memory */
-	__u64 rx_ktime;
-	__u64 diff;
-	int err;
-
-	/* This API cache string lookup (in hashmap), which cause an
-	 * allocation first time this is called. Something to consider
-	 * for real-time use-cases.
-	 */
-	err = xsk_btf__read_field((void **)&rx_ktime_ptr, sizeof(*rx_ktime_ptr),
-				  "rx_ktime", xbi, pkt);
-	if (err) {
-		fprintf(stderr, "ERROR(%d) no rx_ktime?!\n", err);
-		return err;
-	}
-	rx_ktime = *rx_ktime_ptr;
-	/* same as XSK_BTF_READ_FIELD_INTO(rx_ktime, rx_ktime, xbi, pkt); */
-
-	time_now = gettime();
-	diff = time_now - rx_ktime;
-
-	if (debug_meta)
-		printf("Q[%u] meta-time rx_ktime:%llu time_now:%llu diff:%llu ns\n",
-		       qid, rx_ktime, time_now, diff);
-
-	return 0;
-}
-
 static void print_meta_info_mark(uint8_t *pkt, struct xdp_hints_mark *meta,
 				 __u32 qid)
 {
@@ -855,115 +727,6 @@ static void print_pkt_info(uint8_t *pkt, uint32_t len)
 	} else {
 		printf(fmt, len, proto, "Unknown", "", "");
 	}
-}
-
-static int tx_pkt(struct config *cfg, struct xsk_socket_info *xsk)
-{
-	struct xsk_umem_info *umem = xsk->umem;
-	uint64_t pkt_addr = mem_alloc_umem_frame(&umem->mem);
-	uint8_t *pkt = NULL;
-	uint32_t offset = 0; // 256;
-
-	pkt_addr += offset;
-	pr_addr_info(__func__, pkt_addr, umem);
-
-	pkt = xsk_umem__get_data(umem->buffer, pkt_addr);
-	gen_base_pkt(cfg, pkt);
-
-	{
-		uint32_t tx_idx = 0;
-		int ret;
-
-		ret = xsk_ring_prod__reserve(&xsk->tx, 1, &tx_idx);
-		if (ret != 1) {
-			/* No more transmit slots, drop the packet */
-			mem_free_umem_frame(&umem->mem, pkt_addr);
-			fprintf(stderr, "ERR: %s() failed transmit, no slots\n",
-				__func__);
-			return ENOSPC;
-		}
-
-		xsk_ring_prod__tx_desc(&xsk->tx, tx_idx)->addr = pkt_addr;
-		xsk_ring_prod__tx_desc(&xsk->tx, tx_idx)->len = 64;
-		xsk_ring_prod__submit(&xsk->tx, 1);
-		xsk->outstanding_tx++;
-	}
-
-	return complete_tx(xsk);
-}
-
-/* Generate some fake packets (in umem area).  Real system will deliver TX
- * packets containing the needed control information.
- */
-static int invent_tx_pkts(struct config *cfg, struct xsk_umem_info *umem,
-			  const unsigned int n, struct xdp_desc pkts[n])
-{
-	uint32_t len = opt_pkt_size;
-	uint32_t offset = 256;
-	int i;
-
-	for (i = 0; i < n; i++) {
-		uint64_t pkt_addr = mem_alloc_umem_frame(&umem->mem);
-		struct xdp_desc desc;
-		uint8_t *pkt_data;
-
-		if (pkt_addr == INVALID_UMEM_FRAME)
-			return i;
-
-		pkt_addr += offset;
-		desc.addr = pkt_addr;
-		desc.len = len;
-		desc.options = 0;
-
-		/* Write into packet memory area */
-		pkt_data = xsk_umem__get_data(umem->buffer, pkt_addr);
-		gen_base_pkt(cfg, pkt_data);
-
-		pkts[i] = desc;
-	}
-	return i;
-}
-
-static int tx_batch_pkts(struct xsk_socket_info *xsk,
-			 const unsigned int nr,	struct xdp_desc pkts[nr])
-{
-	struct xsk_umem_info *umem = xsk->umem;
-	uint32_t tx_res;
-	uint32_t tx_idx = 0;
-	int i;
-
-	tx_res = xsk_ring_prod__reserve(&xsk->tx, nr, &tx_idx);
-	if (tx_res != nr) {
-		/* No more transmit slots, drop all packets. Normally AF_XDP
-		 * code would try to run TX-completion CQ step to free up slots,
-		 * but we don't want to introduce variability due to RT
-		 * requirements. Other code make sure CQ is processed.
-		 */
-		for (i = 0; i < nr; i++) {
-			mem_free_umem_frame(&umem->mem, pkts[i].addr);
-		}
-		return 0;
-	}
-
-	for (i = 0; i < nr ; i++) {
-		struct xdp_desc *tx_desc;
-
-		tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, tx_idx + i);
-		*tx_desc = pkts[i];
-		//xsk_ring_prod__tx_desc(&xsk->tx, tx_idx)->addr = pkt_addr;
-		//xsk_ring_prod__tx_desc(&xsk->tx, tx_idx)->len = 64;
-		xsk->outstanding_tx++;
-	}
-	xsk_ring_prod__submit(&xsk->tx, nr);
-
-	// Kick Tx
-	// sendto(xsk_socket__fd(xsk->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
-	complete_tx(xsk);
-
-	// See if kicking Rx-side works
-	// recvfrom(xsk_socket__fd(xsk->xsk), NULL, 0, MSG_DONTWAIT, NULL, NULL);
-
-	return nr;
 }
 
 static bool process_packet(struct xsk_socket_info *xsk,
@@ -1148,15 +911,6 @@ static void rx_and_process(struct config *cfg,
 	}
 }
 
-static void rx_avail_packets(struct xsk_container *xsks)
-{
-	for (int i = 0; i < xsks->num; i++) {
-		struct xsk_socket_info *xsk_info = xsks->sockets[i];
-
-		handle_receive_packets(xsk_info);
-	}
-}
-
 /* Default interval in usec */
 #define DEFAULT_INTERVAL	1000000
 
@@ -1198,11 +952,6 @@ static inline int64_t calcdiff_ns(struct timespec t1, struct timespec t2)
 	return diff;
 }
 
-static void print_timespec(struct timespec *ts, char *msg)
-{
-	printf("Time: %lu.%lu - %s\n", ts->tv_sec, ts->tv_nsec, msg);
-}
-
 struct wakeup_stat {
 	long min;
 	long max;
@@ -1211,212 +960,6 @@ struct wakeup_stat {
 	double avg;
 	unsigned long events;
 };
-
-/* Use-case: Accurate cyclic Tx and lazy RX-processing
- *
- * This processing loop is simulating a Time-Triggered schedule, where
- * transmitting packets within a small time-window is the most
- * important task.  Picking up frames in RX-queue is less time
- * critical, as the PCF synchronization packets will have been
- * timestamped (rx_ktime) by XDP before they got enqueued.
- */
-static void tx_cyclic_and_rx_process(struct config *cfg,
-				    struct xsk_container *xsks)
-{
-	struct timespec now, next, next_adj, interval, now_prev;
-	struct wakeup_stat stat = { .min = DEFAULT_INTERVAL, .max = -0xFFFF };
-	struct wakeup_stat stat_adj = { .min = DEFAULT_INTERVAL, .max = -0xFFFF };
-	struct xdp_desc tx_pkts[BATCH_PKTS_MAX];
-	int batch_nr = cfg->batch_pkts;
-	int tx_nr;
-	bool first = true;
-
-	int period = cfg->interval;
-	int timermode = TIMER_ABSTIME;
-	int clock = CLOCK_MONOTONIC;
-
-	// Choosing xsk id 0
-	struct xsk_socket_info *xsk = xsks->sockets[0];
-
-	/* Get packets for *first* iteration */
-	tx_nr = invent_tx_pkts(cfg, xsk->umem, batch_nr, tx_pkts);
-
-	interval.tv_sec = period / USEC_PER_SEC;
-	interval.tv_nsec = (period % USEC_PER_SEC) * 1000;
-
-	clock_gettime(clock, &now);
-
-	next = now;
-	next.tv_sec  += interval.tv_sec;
-	next.tv_nsec += interval.tv_nsec;
-	tsnorm(&next);
-	next_adj = next; /* Not adjusted yet */
-
-	while (!global_exit) {
-		int64_t diff, diff2adj, diff_interval;
-		int64_t avg, avg2adj;
-		int err, n;
-
-		/* Wait for next period, but adjusted for measured inaccuracy */
-		err = clock_nanosleep(clock, timermode, &next_adj, NULL);
-		/* Took case MODE_CLOCK_NANOSLEEP from cyclictest */
-		if (err) {
-			if (err != EINTR)
-				fprintf(stderr, "clock_nanosleep failed."
-					" err:%d errno:%d\n", err, errno);
-			goto out;
-		}
-
-		/* Expecting to wakeup at "next" get systime "now" to check */
-		now_prev = now;
-		err = clock_gettime(clock, &now);
-		if (err) {
-			if (err != EINTR)
-				fprintf(stderr, "clock_getttime() failed."
-					" err:%d errno:%d\n", err, errno);
-			goto out;
-		}
-
-		/* How close is wakeup time to our actual target */
-		diff = calcdiff_ns(now, next); /* Positive num = wokeup after */
-		/* Exclude first measurement as no next_adj happened */
-		if (!first) {
-			if (diff < stat.min)
-				stat.min = diff;
-			if (diff > stat.max)
-				stat.max = diff;
-		}
-		first = false;
-		stat.avg += (double) diff;
-		stat.prev = stat.curr;
-		stat.curr = diff;
-		stat.events++;
-		avg = (stat.avg / stat.events);
-
-		/* Measure inaccuracy of clock_nanosleep */
-		diff2adj = calcdiff_ns(now, next_adj); /* Positive num = wokeup after */
-		stat_adj.avg += (double) diff2adj;
-		stat_adj.events++;
-		avg2adj = (stat_adj.avg / stat_adj.events);
-
-		// IDEA: Spin until exact time occurs (if diff negative)
-
-		/* Send batch of packets */
-		n = tx_batch_pkts(xsk, tx_nr, tx_pkts);
-
-		diff_interval = calcdiff_ns(now, now_prev);
-
-		if (verbose >=1 )
-			printf("TX pkts:%d event:%lu"
-			       " inaccurate wakeup(nanosec) curr:%ld"
-			       "(min:%ld max:%ld avg:%ld avg2adj:%ld)"
-			       " variance(n-1):%ld interval-ns:%ld\n",
-			       n, stat.events, stat.curr,
-			       stat.min, stat.max, avg, avg2adj,
-			       stat.curr - stat.prev,
-			       diff_interval);
-
-		if (debug_time) {
-			print_timespec(&now,  "now");
-			print_timespec(&next_adj, "next_adj");
-			print_timespec(&next, "next");
-		}
-
-		/* Calculate next time to wakeup */
-		next.tv_sec  += interval.tv_sec;
-		next.tv_nsec += interval.tv_nsec;
-		tsnorm(&next);
-
-		/* Adjust for inaccuracy of clock_nanosleep wakeup */
-		uint64_t next_adj_ns = timespec2ns(&next);
-		next_adj_ns = next_adj_ns - avg2adj;
-		ns2timespec(next_adj_ns, &next_adj);
-		tsnorm(&next_adj);
-
-		/* Get packets for *next* iteration */
-		tx_nr = invent_tx_pkts(cfg, xsk->umem, batch_nr, tx_pkts);
-
-		/* Empty RX queues */
-		rx_avail_packets(xsks);
-	}
-out:
-	/* Free umem frames */
-	for (int i = 0; i < tx_nr; i++) {
-		mem_free_umem_frame(&xsk->umem->mem, tx_pkts[i].addr);
-	}
-}
-
-static double calc_period(struct stats_record *r, struct stats_record *p)
-{
-	double period_ = 0;
-	__u64 period = 0;
-
-	period = r->timestamp - p->timestamp;
-	if (period > 0)
-		period_ = ((double) period / NANOSEC_PER_SEC);
-
-	return period_;
-}
-
-static void stats_print(struct stats_record *stats_rec,
-			struct stats_record *stats_prev)
-{
-	uint64_t packets, bytes;
-	double period;
-	double pps; /* packets per sec */
-	double bps; /* bits per sec */
-
-	char *fmt = "%-12s %'11lld pkts (%'10.0f pps)"
-		" %'11lld Kbytes (%'6.0f Mbits/s)"
-		" period:%f\n";
-
-	period = calc_period(stats_rec, stats_prev);
-	if (period == 0)
-		period = 1;
-
-	packets = stats_rec->rx_packets - stats_prev->rx_packets;
-	pps     = packets / period;
-
-	bytes   = stats_rec->rx_bytes   - stats_prev->rx_bytes;
-	bps     = (bytes * 8) / period / 1000000;
-
-	printf(fmt, "AF_XDP RX:", stats_rec->rx_packets, pps,
-	       stats_rec->rx_bytes / 1000 , bps,
-	       period);
-
-	packets = stats_rec->tx_packets - stats_prev->tx_packets;
-	pps     = packets / period;
-
-	bytes   = stats_rec->tx_bytes   - stats_prev->tx_bytes;
-	bps     = (bytes * 8) / period / 1000000;
-
-	printf(fmt, "       TX:", stats_rec->tx_packets, pps,
-	       stats_rec->tx_bytes / 1000 , bps,
-	       period);
-
-	printf("\n");
-}
-
-static void *stats_poll(void *arg)
-{
-	unsigned int interval = 2;
-	struct xsk_container *xsks = arg;
-	struct xsk_socket_info *xsk = xsks->sockets[0]; // FIXME
-	static struct stats_record previous_stats = { 0 };
-
-	previous_stats.timestamp = gettime();
-
-	/* Trick to pretty printf with thousands separators use %' */
-	setlocale(LC_NUMERIC, "en_US");
-
-	while (!global_exit) {
-		sleep(interval);
-		xsk->stats.timestamp = gettime();
-		stats_print(&xsk->stats, &previous_stats);
-		previous_stats = xsk->stats;
-	}
-	return NULL;
-}
 
 static void enter_xsks_into_map(int xsks_map, struct xsk_container *xsks)
 {
@@ -1454,7 +997,7 @@ static void exit_application(int signal)
 
 int main(int argc, char **argv)
 {
-	int ret, err;
+	int err;
 	int xsks_map_fd;
 	void *packet_buffer;
 	uint64_t packet_buffer_size;
@@ -1466,12 +1009,9 @@ int main(int argc, char **argv)
 		.progsec = "xdp",
 		.xsk_wakeup_mode = true, /* Default, change via --spin */
 		.xsk_if_queue = -1,
-		.opt_tx_dmac = default_tx_dmac,
-		.opt_tx_smac = default_tx_smac,
 		.interval = DEFAULT_INTERVAL,
 		.batch_pkts = BATCH_PKTS_DEFAULT,
 	};
-	pthread_t stats_poll_thread;
 	struct xsk_umem_info *umem;
 	struct xsk_container xsks;
 	int queues_max, queues_set;
@@ -1589,9 +1129,6 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	/* Generate packets to TX */
-	gen_base_pkt(&cfg, (uint8_t*)&base_pkt_data);
-
 	/* Open and configure the AF_XDP (xsk) socket(s) */
 	for (i = 0; i < xsks.num; i++) {
 		struct xsk_socket_info *xski;
@@ -1611,17 +1148,6 @@ int main(int argc, char **argv)
 	}
 	enter_xsks_into_map(xsks_map_fd, &xsks);
 
-	/* Start thread to do statistics display */
-	if (0 && verbose) { // FIXME disabled as currently broken
-		ret = pthread_create(&stats_poll_thread, NULL,
-				     stats_poll, &xsks);
-		if (ret) {
-			fprintf(stderr, "ERROR: Failed creating statistics thread "
-				"\"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-	}
-
 	if (cfg.sched_prio) {
 		/* Setup sched priority: Have impact on wakeup accuracy */
 		memset(&schedp, 0, sizeof(schedp));
@@ -1638,25 +1164,8 @@ int main(int argc, char **argv)
 			       cfg.sched_prio, cfg.sched_policy);
 	}
 
-	/* Issue: At this point AF_XDP socket might not be ready e.g. for TX.
-	 * It seems related with XDP attachment causing link down/up event for
-	 * some drivers.  Q: What is the right method/API that waits for link to
-	 * be initilized correctly?
-	 *
-	 * This workaround keeps trying to send a single packet, and
-	 * check return value seen from sendto() syscall, until it
-	 * doesn't return an error.
-	 */
-	while ((err = tx_pkt(&cfg, xsks.sockets[0]))) {
-		fprintf(stderr, "WARN(%d): Failed to Tx pkt, will retry\n", err);
-		sleep(1);
-	}
-
 	/* Receive and count packets than drop them */
 	rx_and_process(&cfg, &xsks);
-
-	/* Send packets cyclic */
-	// tx_cyclic_and_rx_process(&cfg, &xsks);
 
 	/* Cleanup */
 	for (i = 0; i < xsks.num; i++)
