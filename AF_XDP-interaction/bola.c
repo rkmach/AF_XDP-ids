@@ -53,6 +53,9 @@
 #include "ethtool_utils.h"
 #include "lib_checksum.h"
 
+#include "str2dfa.h"
+#include "common_kern_user.h"
+
 #define NUM_FRAMES         4096 /* Frames per queue */
 #define FRAME_SIZE         XSK_UMEM__DEFAULT_FRAME_SIZE /* 4096 */
 #define FRAME_SIZE_MASK    (FRAME_SIZE - 1)
@@ -313,6 +316,298 @@ static void exit_application(int signal)
 	global_exit = true;
 }
 
+static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
+{
+	struct dfa_entry *map_entries = dfa->entries;
+	uint32_t i_entry, n_entry = dfa->entry_number;
+	int i_cpu, n_cpu = libbpf_num_possible_cpus();
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value ids_map_values[n_cpu];
+	ids_inspect_state value_state;
+	accept_state_flag value_flag;
+
+	printf("Number of CPUs: %d\n\n", n_cpu);
+
+	/* Initial */
+	ids_map_key.padding = 0;
+	memset(ids_map_values, 0, sizeof(ids_map_values));
+
+	/* Convert dfa to map */
+	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+		ids_map_key.state = map_entries[i_entry].key_state;
+		ids_map_key.unit = map_entries[i_entry].key_unit;
+		value_state = map_entries[i_entry].value_state;
+		value_flag = map_entries[i_entry].value_flag;
+		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
+			ids_map_values[i_cpu].state = value_state;
+			ids_map_values[i_cpu].flag = value_flag;
+		}
+		if (bpf_map_update_elem(ids_map_fd,
+								&ids_map_key, ids_map_values, 0) < 0) {
+			fprintf(stderr,
+				"WARN: Failed to update bpf map file: err(%d):%s\n",
+				errno, strerror(errno));
+			return -1;
+		} else {
+			if (verbose > 1) {
+				printf("---------------------------------------------------\n");
+				// printf("New element is added in to map (%s)\n",
+				// 		ids_inspect_map_name);
+				printf("Key - state: %d, unit: %c\n",
+						ids_map_key.state, ids_map_key.unit);
+				printf("Value - state: %d, flag: %d\n",
+						value_state, value_flag);
+				printf("---------------------------------------------------\n");
+			}
+		}
+	}
+	printf("Total %d entries are inserted\n\n", n_entry);
+
+	return 0;
+}
+
+void check_end_line(char* token){
+	size_t len = strcspn(token, "\n");
+	if(len == strlen(token))
+		return;
+	token[len] = '\0';
+}
+
+int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t src, uint16_t dst,
+    char** fast_patterns_array, size_t len_fp_arr)
+{
+    char map_name[24];
+    struct dfa_struct dfa;
+    
+    const char *pin_dir = "/sys/fs/bpf/amigo";  //MUDAR
+
+    /* In this moment, every pattern in the port group has been collected, so it's possible to create dfas */
+    // TESTAR ESSA FUNÇÂO!!!!
+	str2dfa(fast_patterns_array, len_fp_arr, &dfa);
+
+	struct port_map_key key;
+	key.src_port = src;
+	key.dst_port = dst;
+
+	// no mapa de portas, cria a chave com base nas duas portas, o valor é o índice no mapa global
+    if (bpf_map_update_elem(port_map_fd, &key, index, BPF_ANY) < 0) {
+        fprintf(stderr,
+            "ERROR: Failed to update bpf map file: err(%d):%s\n",
+            errno, strerror(errno));
+        return -1;
+    }
+
+    // pega o mapa correto e adiciona o DFA recém criado
+    sprintf(map_name, "ids_map%d", *index);
+    
+    int ids_map_fd = open_bpf_map_file(pin_dir, map_name, NULL);
+    if (ids_map_fd < 0) {
+        fprintf(stderr,
+            "ERROR: Failed to open bpf ids map: err(%d):%s\n",
+            errno, strerror(errno));
+        return -1;
+    }
+    if (dfa2map(ids_map_fd, &dfa) < 0) {
+        fprintf(stderr,
+            "ERROR: Failed to put dfa on ids map: err(%d):%s\n",
+            errno, strerror(errno));
+        return -1;
+    }
+	free(dfa.entries);
+    return 0;
+}
+
+// criar um port_group para cada linha do arquivo
+struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int global_map_fd, int port_map_fd){
+	char line[1024];
+	FILE *file;
+	char* token, *aux_token;
+	char* inner_token, *aux_inner_token, *src_port, *dst_port;
+	char* subtoken, *aux_subtoken;
+	struct port_group_t* current_port_group;
+	struct rule_t* rule;
+	int rule_index = 0, n_contents = 0, pgs_index = 0;
+	uint64_t fast_pattern;
+	uint32_t sid;
+	int M = 500;
+	int N = 500;
+
+	char* fast_patterns_array[300];
+	size_t index_fp = 0;
+
+	// char* regular_patterns_array[600];
+	// int index_rp = 0;
+
+	file = fopen(rules_file, "r");
+	if (file == NULL) {
+		printf("Error opening file!\n");
+		return NULL;
+	}
+	struct port_group_t** port_groups = (struct port_group_t**)malloc(sizeof(struct port_group_t*)*M);
+
+	while(fgets(line, 1024, file)){
+		token = __strtok_r(line, "~", &aux_token);  // these are the src and dst ports
+		current_port_group = (struct port_group_t*)malloc(sizeof(struct port_group_t));
+
+		if(pgs_index >= M){
+			M = M + 100;
+			current_port_group->rules = (struct rule_t**)realloc(current_port_group->rules, sizeof(struct rule_t*)*M);
+		}
+
+    	current_port_group->n_rules = 0;
+		inner_token = __strtok_r(token, ";", &aux_inner_token);
+		src_port = inner_token;
+		if(strcmp(src_port, "any") == 0)
+			current_port_group->src_port = 0;
+		else
+			current_port_group->src_port = atoi(src_port);
+		inner_token = __strtok_r(NULL, ";", &aux_inner_token);
+    	dst_port = inner_token;
+		if(strcmp(dst_port, "any") == 0)
+			current_port_group->dst_port = 0;
+		else
+			current_port_group->dst_port = atoi(dst_port);
+
+		current_port_group->rules = (struct rule_t**)malloc(sizeof(struct rule_t*)*N);
+
+		token = __strtok_r(NULL, "~", &aux_token);
+
+		while(token != NULL){  // start to parse the actual rules
+			// Needs to realloc
+			if (current_port_group->n_rules >= N){
+				N = N + 50;
+				current_port_group->rules = (struct rule_t**)realloc(current_port_group->rules, sizeof(struct rule_t*)*N);
+			}
+
+			rule = (struct rule_t*)malloc(sizeof(struct rule_t));
+
+			inner_token = __strtok_r(token, ";", &aux_inner_token);
+
+			// add fp in array
+			fast_patterns_array[index_fp++] = inner_token;
+
+			fast_pattern = hash((unsigned char*)inner_token);
+			inner_token = __strtok_r(NULL, ";", &aux_inner_token);
+      		check_end_line(inner_token);  // remove '\n'
+			sid = atoi(inner_token);
+
+			rule->fast_pattern = fast_pattern;
+			rule->sid = sid;
+
+			inner_token = __strtok_r(NULL, ";", &aux_inner_token);
+			if(inner_token){
+			
+				subtoken = __strtok_r(inner_token, ",", &aux_subtoken);
+				while(subtoken != NULL){
+				check_end_line(subtoken);  // remove '\n'
+
+				// regular_patterns_array[index_rp++] = subtoken;
+
+				rule->contents[n_contents++] = hash((unsigned char*)subtoken);
+				subtoken = __strtok_r(NULL, ",", &aux_subtoken);
+				}
+				rule->n_contents = n_contents;
+			}
+			else{
+				rule->n_contents = 0;
+			}
+			n_contents = 0;
+			current_port_group->rules[rule_index] = rule;
+			rule_index++;
+			current_port_group->n_rules++;
+
+			token = __strtok_r(NULL, "~", &aux_token);
+		}
+    	port_groups[pgs_index] = current_port_group;
+  		rule_index = 0;
+
+		// for(int k = 0; k < index_fp; k++){
+		// 	printf("%s\n", fast_patterns_array[k]);
+		// }
+		// printf("\n");
+
+        if (initialize_fast_pattern_port_group_map(port_map_fd, &pgs_index, current_port_group->src_port,
+                current_port_group->dst_port, fast_patterns_array, index_fp) < 0) {
+            fprintf(stderr,
+                "WARN: Failed to update bpf map file: err(%d):%s\n",
+                errno, strerror(errno));
+            return NULL;
+        }
+		// CRIAR DFA dos outros padrões tbm!!
+
+		pgs_index++;
+		index_fp = 0;
+
+	}
+	// py_finalize();
+    fclose(file);
+	*n_pgs = pgs_index;
+	return port_groups;
+}
+
+void destroy_port_groups(struct protocol_port_groups_t* protocol_port_group){
+	for(ssize_t i = 0; i < protocol_port_group->n_port_groups; i++){
+		for (ssize_t j = 0; j < protocol_port_group->port_groups_array[i]->n_rules; j++){
+			free(protocol_port_group->port_groups_array[i]->rules[j]);
+		}
+        free(protocol_port_group->port_groups_array[i]->rules);
+		free(protocol_port_group->port_groups_array[i]);
+	}
+	free(protocol_port_group->port_groups_array);
+}
+
+// void fill_userspace_dfa(struct ids_inspect_map_value* ids_inspect_array, struct dfa_struct *dfa){
+// 	struct dfa_entry *map_entries = dfa->entries;
+// 	struct ids_inspect_map_key ids_map_key;
+// 	memset(ids_inspect_array, 0, sizeof(IDS_INSPECT_ARRAY_SIZE));
+// 	uint32_t array_index;
+// 	uint32_t i_entry, n_entry = dfa->entry_number;
+// 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+// 		ids_map_key.state = map_entries[i_entry].key_state;
+// 		ids_map_key.unit = map_entries[i_entry].key_unit;
+// 		array_index = *(uint32_t *)&ids_map_key;
+// 		ids_inspect_array[array_index].state = map_entries[i_entry].value_state;
+// 		ids_inspect_array[array_index].flag = map_entries[i_entry].value_flag;
+// 	}
+// }
+
+int pin_maps_in_bpf_object(struct bpf_object *bpf_obj, struct config *cfg, const char* pin_basedir)
+{
+	char map_filename[1024];
+	int err, len;
+
+	len = snprintf(map_filename, 1024, "%s/%s/%s",
+		       pin_basedir, cfg->ifname, "map_name");
+	if (len < 0) {
+		fprintf(stderr, "ERR: creating map_name\n");
+		return EXIT_FAIL_OPTION;
+	}
+
+	/* Existing/previous XDP prog might not have cleaned up */
+	if (access(map_filename, F_OK ) != -1 ) {
+		if (verbose)
+			printf(" - Unpinning (remove) prev maps in %s/\n",
+			       cfg->pin_dir);
+
+		/* Basically calls unlink(3) on map_filename */
+		err = bpf_object__unpin_maps(bpf_obj, cfg->pin_dir);
+		if (err) {
+			fprintf(stderr, "ERR: UNpinning maps in %s\n", cfg->pin_dir);
+			return EXIT_FAIL_BPF;
+		}
+	}
+	if (verbose)
+		printf(" - Pinning maps in %s/\n", cfg->pin_dir);
+
+	/* This will pin all maps in our bpf_object */
+	err = bpf_object__pin_maps(bpf_obj, cfg->pin_dir);
+	if (err)
+		return EXIT_FAIL_BPF;
+
+	return 0;
+}
+
+
 int main(int argc, char **argv)
 {
 	int xsks_map_fd;
@@ -335,7 +630,7 @@ int main(int argc, char **argv)
     cfg.xsk_bind_flags = XDP_COPY;
 
     struct bpf_object *bpf_obj = NULL;
-	struct bpf_map *map;
+	// struct bpf_map *map;
 
     /* Global shutdown handler */
 	signal(SIGINT, exit_application);
@@ -348,14 +643,19 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-    /* We also need to load the xsks_map */
-    map = bpf_object__find_map_by_name(bpf_obj, "xsks_map");
-    xsks_map_fd = bpf_map__fd(map);
-    if (xsks_map_fd < 0) {
-        fprintf(stderr, "ERROR: no xsks map found: %s\n",
-            strerror(xsks_map_fd));
-        exit(EXIT_FAILURE);
-    }
+    const char* pin_basedir = "/sys/fs/bpf";
+    char pin_dir[1024];
+    size_t len = snprintf(pin_dir, 1024, "%s/%s", pin_basedir, cfg.ifname);
+	if (len < 0) {
+		fprintf(stderr, "ERR: creating pin dirname\n");
+		return EXIT_FAIL_OPTION;
+	}
+
+	printf("\nmap dir: %s\n\n", pin_dir);
+    strcpy(cfg.pin_dir, pin_dir);
+    
+    pin_maps_in_bpf_object(bpf_obj, &cfg, pin_basedir);
+
 
     // inicia as estruturas BTF
     int err = init_btf_info_via_bpf_object(bpf_obj, &xdp_hints_mark);
@@ -370,6 +670,45 @@ int main(int argc, char **argv)
 			strerror(errno));
 		exit(EXIT_FAILURE);
 	}
+
+    int tcp_port_map_fd = open_bpf_map_file(pin_dir, "tcp_port_map", NULL);
+	if (tcp_port_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	int udp_port_map_fd = open_bpf_map_file(pin_dir, "udp_port_map", NULL);
+	if (udp_port_map_fd < 0){
+		return EXIT_FAIL_BPF;
+	}
+
+    int global_map_fd = open_bpf_map_file(pin_dir, "global_map", NULL);
+	if (global_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	int tcp_num_port_groups;
+	struct protocol_port_groups_t tcp_port_groups;
+    const char* tcp_fast_patterns_with_sid_file_name = "./patterns/tcp-fp_with_sid.txt";
+	tcp_port_groups.port_groups_array = create_port_groups(tcp_fast_patterns_with_sid_file_name, &tcp_num_port_groups,
+        global_map_fd, tcp_port_map_fd);
+    if (!tcp_port_groups.port_groups_array ) {
+		return EXIT_FAIL_BPF;
+	}
+    tcp_port_groups.n_port_groups = tcp_num_port_groups;
+
+
+
+
+    /* --- In this moment, every possible DFA has been filled --- */
+
+    /* We also need to load the xsks_map */
+    // map = bpf_object__find_map_by_name(bpf_obj, "xsks_map");
+    xsks_map_fd = open_bpf_map_file(pin_dir, "xsks_map", NULL);
+    if (xsks_map_fd < 0) {
+        fprintf(stderr, "ERROR: no xsks map found: %s\n",
+            strerror(xsks_map_fd));
+        exit(EXIT_FAILURE);
+    }
 
     /* Configure and initialize AF_XDP sockets  (vetor de ponteiros!!) */
     int n_queues = 1;
@@ -400,6 +739,7 @@ int main(int argc, char **argv)
 	}
     free(umems);
     free(xsk_sockets);
+    destroy_port_groups(&tcp_port_groups);
     xdp_link_detach(cfg.ifindex, cfg.xdp_flags, 0);
     return 0;
 }

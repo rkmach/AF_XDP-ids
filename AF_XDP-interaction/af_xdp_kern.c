@@ -18,12 +18,12 @@ struct {
 	__uint(value_size, sizeof(int));
 } xsks_map SEC(".maps");
 
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(max_entries, MAX_AF_SOCKS);
-} xdp_stats_map SEC(".maps");
+// struct {
+// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+// 	__type(key, __u32);
+// 	__type(value, __u32);
+// 	__uint(max_entries, MAX_AF_SOCKS);
+// } xdp_stats_map SEC(".maps");
 
 #define PORT_RANGE 65536
 #define IDS_INSPECT_MAP_SIZE 65536
