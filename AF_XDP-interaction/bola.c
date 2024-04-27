@@ -20,6 +20,8 @@
 #include <bpf/bpf.h>
 #include <xdp/xsk.h>
 
+#include "btf.h"
+
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <linux/if_link.h>
@@ -150,24 +152,31 @@ static const char *__doc__ = "AF_XDP kernel bypass example\n";
 
 static bool global_exit;
 
-struct xsk_umem_info {
-	struct xsk_ring_prod fq;  // fill queue
-	struct xsk_ring_cons cq;  // completion queue
-	struct xsk_umem *umem;
-	void *buffer;
-};
+#define NANOSEC_PER_SEC 1000000000 /* 10^9 */
+static uint64_t gettime(void)
+{
+	struct timespec t;
+	int res;
 
-struct xsk_socket_info {
-	struct xsk_ring_cons rx;
-	struct xsk_ring_prod tx;
-	struct xsk_umem_info *umem;
-	struct xsk_socket *xsk;
+	res = clock_gettime(CLOCK_MONOTONIC, &t);
+	if (res < 0) {
+		fprintf(stderr, "Error with clock_gettime! (%i)\n", res);
+		exit(EXIT_FAIL);
+	}
+	return (uint64_t) t.tv_sec * NANOSEC_PER_SEC + t.tv_nsec;
+}
 
-	uint64_t umem_frame_addr[NUM_FRAMES];
-	uint32_t umem_frame_free;
+/*
+essa opção permite busy pool, porém a placa q temos não suporta
+static void __exit_with_error(int error, const char *file, const char *func,
+			      int line)
+{
+	fprintf(stderr, "%s:%s:%i: errno: %d/\"%s\"\n", file, func,
+		line, error, strerror(error));
+	exit(EXIT_FAILURE);
+}
 
-	uint32_t outstanding_tx;
-};
+#define exit_with_error(error) __exit_with_error(error, __FILE__, __func__, __LINE__)
 
 static void apply_setsockopt(struct xsk_socket_info *xsk, bool opt_busy_poll,
 			     int opt_batch_size)
@@ -192,198 +201,34 @@ static void apply_setsockopt(struct xsk_socket_info *xsk, bool opt_busy_poll,
 		       (void *)&sock_opt, sizeof(sock_opt)) < 0)
 		exit_with_error(errno);
 }
+*/
 
-struct xsk_umem_info* configure_umem(void* packet_buffer, size_t packet_buffer_size){
-    struct xsk_umem_info* umem;
-    umem = calloc(1, sizeof(*umem));
-    if (!umem){
-        printf("Problema no calloc para configurar UMEM\n");
-        return NULL;
-    }
+// criar e lógica para receber as info de metadado
+// e pegar o autômato correto.
+void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
+	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
 
-    struct xsk_umem_config xsk_umem_cfg = {
-		/* We recommend that you set the fill ring size >= HW RX ring size +
-		 * AF_XDP RX ring size. Make sure you fill up the fill ring
-		 * with buffers at regular intervals, and you will with this setting
-		 * avoid allocation failures in the driver. These are usually quite
-		 * expensive since drivers have not been written to assume that
-		 * allocation failures are common. For regular sockets, kernel
-		 * allocated memory is used that only runs out in OOM situations
-		 * that should be rare.
-		 */
-//		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS * 2,
-		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS, /* Fix later */
-		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-		.frame_size = FRAME_SIZE,
-		/* Notice XSK_UMEM__DEFAULT_FRAME_HEADROOM is zero */
-		.frame_headroom = 256,
-		//.frame_headroom = 0,
-		.flags = 0
-	};
-
-    // UMEM está sendo criada com a configuração padrão (último parâmetro = NULL)
-    int ret = xsk_umem__create(&umem->umem, packet_buffer, packet_buffer_size, &umem->fq, &umem->cq, &xsk_umem_cfg);
-    if (ret){
-        printf("problema para criar a UMEM usando libxdp\n");
-        return NULL;
-    }
-    umem->buffer = packet_buffer;
-    return umem;
-}
-
-uint64_t xsk_alloc_umem_frame(struct xsk_socket_info* xsk_info){
-    uint64_t frame;
-    if(xsk_info->umem_frame_free == 0){
-        printf("Não dá pra alocar mais frames!\n LIMITE MÀXIMO ATINGIDO");
-        return INVALID_UMEM_FRAME;
-    }
-    frame = xsk_info->umem_frame_addr[xsk_info->umem_frame_free-1];
-    xsk_info->umem_frame_addr[xsk_info->umem_frame_free] = INVALID_UMEM_FRAME;
-    xsk_info->umem_frame_free--;
-    return frame;
-}
-
-struct xsk_socket_info* configure_socket(struct config *cfg, int i_queue, struct xsk_umem_info* umem){
-    struct xsk_socket_config xsk_config;
-    struct xsk_socket_info* xsk_info;
-
-    xsk_info = calloc(1, sizeof(*xsk_info));
-    if(!xsk_info){
-        printf("Falha no calloc da xsk info\n");
-        return NULL;
-    }
-
-    xsk_info->umem = umem;
-
-    xsk_config.rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS;  // 2048
-    xsk_config.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;  // 2048
-
-    xsk_config.libbpf_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD;
-
-    xsk_config.xdp_flags = cfg->xdp_flags;
-    xsk_config.bind_flags = cfg->xsk_bind_flags;
-
-    int ret = xsk_socket__create(&xsk_info->xsk, cfg->ifname, i_queue, umem->umem, &xsk_info->rx, &xsk_info->tx, &xsk_config);
-
-    if (ret != 0){
-        printf("Erro na chamada de socket_create, dentro de configure_socket\n");
-        errno = -ret;
-        return NULL;
-    }
-    uint32_t prog_id = 0;
-    ret = bpf_xdp_query_id(cfg->ifindex, cfg->xdp_flags, &prog_id);  // tá PREENCHENDO a variável prog_id
-    if (ret){
-        printf("Erro ao query id");
-    }
-
-    // alocação de frames na UMEM !!!
-
-    for(int i = 0; i < NUM_FRAMES; i++){
-        xsk_info->umem_frame_addr[i] = i * FRAME_SIZE;  // o endereço do frame i é i*4096
-    }
-    xsk_info->umem_frame_free = NUM_FRAMES;  // significa que os 4096 frames estão livres 
-
-    uint32_t idx;
-    // reserva os slots do fill ring
-    // acho que isso significa passar o fill ring para o kernel, para que ele possa ver onde colocar os pacotes de RX
-    ret = xsk_ring_prod__reserve(&xsk_info->umem->fq, XSK_RING_PROD__DEFAULT_NUM_DESCS, &idx);  // PREENCHE a var idx
-
-    if (ret != XSK_RING_PROD__DEFAULT_NUM_DESCS){
-        printf("Erro ao reservar os descritores que serão colocados os endereços no ring FILL\n");
-        return NULL;
-    }
-
-    // agora sim eu vou colocar os endereços da UMEM no fill ring (!!!!!!!!!)
-    for(int i = 0; i < XSK_RING_PROD__DEFAULT_NUM_DESCS; i++){
-        *xsk_ring_prod__fill_addr(&xsk_info->umem->fq, idx) = xsk_alloc_umem_frame(xsk_info);
-        idx++;
-    }
-    
-    // submetendo os slot do fill ring para os quais foram colocados endereços (todos, nesse caso)
-    // significa que o kernel já pode ler e começar a preencher a UMEM com o que receber
-    xsk_ring_prod__submit(&xsk_info->umem->fq, XSK_RING_PROD__DEFAULT_NUM_DESCS);
-
-    // apply_setsockopt(xsk_info, cfg->opt_busy_poll, RX_BATCH_SIZE);
-
-    return xsk_info;
-}
-
-static void enter_xsks_into_map(int xsks_map, struct xsk_socket_info **sockets, size_t len_sockets)
-{
-	int i;
-
-	if (xsks_map < 0) {
-		fprintf(stderr, "ERROR: no xsks map found: %s\n",
-			strerror(xsks_map));
-		exit(EXIT_FAILURE);
-	}
-
-	for (i = 0; i < len_sockets; i++) {
-		int fd = xsk_socket__fd(sockets[i]->xsk);
-		int key, ret;
-
-		key = i;
-		/* When entering XSK socket into map redirect have effect */
-		ret = bpf_map_update_elem(xsks_map, &key, &fd, 0);
-		if (ret) {
-			fprintf(stderr, "ERROR: bpf_map_update_elem %d\n", i);
-			exit(EXIT_FAILURE);
-		}
-		if (debug)
-			printf("%s() enable redir for xsks_map_fd:%d Key:%d fd:%d\n",
-			       __func__, xsks_map, key, fd);
-
-	}
-}
-
-int af_xdp_init(struct xsk_umem_info **umems, struct xsk_socket_info **xsk_sockets, int n_queues, struct config* cfg){
-    void *packet_buffer = NULL;
-	size_t packet_buffer_size;
-    struct xsk_umem_info* umem;
-    struct xsk_socket_info* xsk_socket;
-
-    packet_buffer_size = 4096 * 4096;  // NUM_FRAMES * FRAME_SIZE; número de packet buffers * tamanho de cada packet buffer  
-
-    for(int i_queue = 0; i_queue < n_queues; i_queue++){
-        if(posix_memalign(&packet_buffer, getpagesize(), packet_buffer_size)){
-            printf("Problema ao alocar memória do buffer da UMEM!");
+    print_meta_info_via_btf(pkt, xsk);
+	
+    char* first_char_payload = NULL;
+    first_char_payload = (char*) pkt + 54;
+    if (!first_char_payload)
+        return;
+    if (len > 54) {
+        for(int i = 0; i<len-54; i++){
+            printf("%c\n", *first_char_payload);
+            first_char_payload++;
         }
-        
-        umem = configure_umem(packet_buffer, packet_buffer_size);
-        if (umem == NULL){
-            printf("Não configurei UMEM corretamente!\n");
-            return -1;
-        }
-
-        xsk_socket = configure_socket(cfg, i_queue, umem);
-        if (xsk_socket == NULL) {
-			fprintf(stderr, "ERROR: Can't setup AF_XDP socket \"%s\"\n",
-				strerror(errno));
-			return EXIT_FAILURE;
-		}
-
-        umems[i_queue] = umem;
-        xsk_sockets[i_queue] = xsk_socket;
     }
-
-    return 0;
-}
-
-void xsk_free_umem_frame(struct xsk_socket_info* xsk_info, uint64_t frame){
-    xsk_info->umem_frame_addr[xsk_info->umem_frame_free] = frame;
-    xsk_info->umem_frame_free++;
-}
-
-void process_packet(){
-    printf("Processando o pacote!!!\n");
 }
 
 void handle_receive_packets(struct xsk_socket_info* xsk_info){
     uint32_t idx_rx = 0;
     uint32_t idx_fq = 0;
     int ret;
-
     unsigned int frames_received, stock_frames;
+
+    recvfrom(xsk_socket__fd(xsk_info->xsk), NULL, 0, MSG_DONTWAIT, NULL, NULL);
 
     // ver se no RX tem alguma coisa
     frames_received = xsk_ring_cons__peek(&xsk_info->rx, RX_BATCH_SIZE, &idx_rx);  // prenche a var idx_rx
@@ -423,8 +268,8 @@ void handle_receive_packets(struct xsk_socket_info* xsk_info){
 
         // função que termina de verificar om pacote (AAAAAAAAAAAAAAAAAAAAAA)
         // process_packet(xsk_info, addr, len);
-        printf("pacote len = %d", len);
-        process_packet();
+        printf("pacote len = %d\n", len);
+        process_packet(xsk_info, addr, len);
 
         // adiciona o endereço à lista de endereços disponíveis do fill ring da UMEM
         xsk_free_umem_frame(xsk_info, addr);
@@ -523,6 +368,14 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+    // inicia as estruturas BTF
+    int err = init_btf_info_via_bpf_object(bpf_obj);
+	if (err) {
+		fprintf(stderr, "ERROR(%d): Invalid BTF info: errno:%s\n",
+			err, strerror(errno));
+		return EXIT_FAILURE;
+	}
+
     if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
 		fprintf(stderr, "ERROR: setrlimit(RLIMIT_MEMLOCK) \"%s\"\n",
 			strerror(errno));
@@ -541,10 +394,12 @@ int main(int argc, char **argv)
         printf("Não consegui alocar o vetor de UMEMS ou o vetor de sockets!\n");
     }
 
+    // this function configures UMEMs and XSKs
     if(!af_xdp_init(umems, xsk_sockets, n_queues, &cfg)){
         printf("Tudo certo!!\n");
     }
 
+    /* fill xsks map */
     enter_xsks_into_map(xsks_map_fd, xsk_sockets, n_queues);
 
     rx_and_process(&cfg, xsk_sockets, n_queues);

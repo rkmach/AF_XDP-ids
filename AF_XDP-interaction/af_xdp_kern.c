@@ -195,18 +195,8 @@ int xdp_ids_func(struct xdp_md *ctx)
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
     __u32 rx_queue_index = ctx->rx_queue_index;
-    // int send_to_userspace = 1;
 
     __u32 action = XDP_PASS; /* Default action */
-
-    // bpf_printk("rx_queue_index = %d", rx_queue_index);
-    // if(send_to_userspace){
-    //     if(bpf_map_lookup_elem(&xsks_map, &rx_queue_index)){
-    //         return bpf_redirect_map(&xsks_map, rx_queue_index, 0);
-    //     }
-    //     // action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
-    //     // goto out;
-    // }
 
     /* Parse packet */
     struct hdr_cursor nh;
