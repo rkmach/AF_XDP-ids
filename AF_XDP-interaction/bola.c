@@ -152,19 +152,7 @@ static const char *__doc__ = "AF_XDP kernel bypass example\n";
 
 static bool global_exit;
 
-#define NANOSEC_PER_SEC 1000000000 /* 10^9 */
-static uint64_t gettime(void)
-{
-	struct timespec t;
-	int res;
-
-	res = clock_gettime(CLOCK_MONOTONIC, &t);
-	if (res < 0) {
-		fprintf(stderr, "Error with clock_gettime! (%i)\n", res);
-		exit(EXIT_FAIL);
-	}
-	return (uint64_t) t.tv_sec * NANOSEC_PER_SEC + t.tv_nsec;
-}
+struct xdp_hints_mark xdp_hints_mark = { 0 };
 
 /*
 essa opção permite busy pool, porém a placa q temos não suporta
@@ -207,15 +195,16 @@ static void apply_setsockopt(struct xsk_socket_info *xsk, bool opt_busy_poll,
 // e pegar o autômato correto.
 void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
+    int offset;
 
-    print_meta_info_via_btf(pkt, xsk);
+    offset = is_tcp(pkt, &xdp_hints_mark) ? 54 : 42;
 	
     char* first_char_payload = NULL;
-    first_char_payload = (char*) pkt + 54;
+    first_char_payload = (char*) pkt + offset;
     if (!first_char_payload)
         return;
-    if (len > 54) {
-        for(int i = 0; i<len-54; i++){
+    if (len > offset) {
+        for(int i = 0; i<len-offset; i++){
             printf("%c\n", *first_char_payload);
             first_char_payload++;
         }
@@ -369,7 +358,7 @@ int main(int argc, char **argv)
     }
 
     // inicia as estruturas BTF
-    int err = init_btf_info_via_bpf_object(bpf_obj);
+    int err = init_btf_info_via_bpf_object(bpf_obj, &xdp_hints_mark);
 	if (err) {
 		fprintf(stderr, "ERROR(%d): Invalid BTF info: errno:%s\n",
 			err, strerror(errno));

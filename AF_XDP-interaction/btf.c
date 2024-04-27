@@ -19,7 +19,7 @@ static uint64_t gettime(void)
 }
 
 struct xdp_hints_rx_time xdp_hints_rx_time = { 0 };
-struct xdp_hints_mark xdp_hints_mark = { 0 };
+// struct xdp_hints_mark xdp_hints_mark = { 0 };
 
 struct xsk_btf_info *setup_btf_info(struct btf *btf,
 				    const char *struct_name)
@@ -36,30 +36,30 @@ struct xsk_btf_info *setup_btf_info(struct btf *btf,
 	return xbi;
 }
 
-int init_btf_info_via_bpf_object(struct bpf_object *bpf_obj)
+int init_btf_info_via_bpf_object(struct bpf_object *bpf_obj, struct xdp_hints_mark* xdp_hints_mark)
 {
 	struct btf *btf = bpf_object__btf(bpf_obj);
 	struct xsk_btf_info *xbi;
 
-	xbi = setup_btf_info(btf, "xdp_hints_rx_time");
-	if (xbi) {
-		/* Lookup info on required member "rx_ktime" */
-		if (!xsk_btf__field_member("rx_ktime", xbi,
-					   &xdp_hints_rx_time.rx_ktime))
-			return -EBADSLT;
-		if (!xsk_btf__field_member("xdp_rx_cpu", xbi,
-					   &xdp_hints_rx_time.xdp_rx_cpu))
-			return -EBADSLT;
-		xdp_hints_rx_time.btf_type_id = xsk_btf__btf_type_id(xbi);
-		xdp_hints_rx_time.xbi = xbi;
-	}
+	// xbi = setup_btf_info(btf, "xdp_hints_rx_time");
+	// if (xbi) {
+	// 	/* Lookup info on required member "rx_ktime" */
+	// 	if (!xsk_btf__field_member("rx_ktime", xbi,
+	// 				   &xdp_hints_rx_time.rx_ktime))
+	// 		return -EBADSLT;
+	// 	if (!xsk_btf__field_member("xdp_rx_cpu", xbi,
+	// 				   &xdp_hints_rx_time.xdp_rx_cpu))
+	// 		return -EBADSLT;
+	// 	xdp_hints_rx_time.btf_type_id = xsk_btf__btf_type_id(xbi);
+	// 	xdp_hints_rx_time.xbi = xbi;
+	// }
 
 	xbi = setup_btf_info(btf, "xdp_hints_mark");
 	if (xbi) {
-		if (!xsk_btf__field_member("mark", xbi, &xdp_hints_mark.mark))
+		if (!xsk_btf__field_member("mark", xbi, &xdp_hints_mark->mark))
 			return -EBADSLT;
-		xdp_hints_mark.btf_type_id = xsk_btf__btf_type_id(xbi);
-		xdp_hints_mark.xbi = xbi;
+		xdp_hints_mark->btf_type_id = xsk_btf__btf_type_id(xbi);
+		xdp_hints_mark->xbi = xbi;
 	}
 
 	return 0;
@@ -119,35 +119,35 @@ int print_meta_info_time(uint8_t *pkt, struct xdp_hints_rx_time *meta,
 	return 0;
 }
 
-void print_meta_info_mark(uint8_t *pkt, struct xdp_hints_mark *meta,
-				 __u32 qid)
-{
-	struct xsk_btf_info *xbi = meta->xbi;
-	__u32 mark = 0;
+bool is_tcp(uint8_t *pkt, struct xdp_hints_mark *meta){
+    struct xsk_btf_info *xbi = meta->xbi;
+	__u32 mark = 3;
 
 	/* The 'mark' value is not updated in case of errors */
 	XSK_BTF_READ_INTO(mark, &meta->mark, xbi, pkt);
-	printf("Q[%u] meta-mark mark:%u\n", qid, mark);
+    if(mark == 1)
+        return true;
+    return false;
 }
 
-void print_meta_info_via_btf(uint8_t *pkt, struct xsk_socket_info *xsk)
-{
-	__u32 btf_id = xsk_umem__btf_id(pkt);
-	__u32 qid = xsk->queue_id;
+// void print_meta_info_via_btf(uint8_t *pkt, struct xsk_socket_info *xsk)
+// {
+// 	__u32 btf_id = xsk_umem__btf_id(pkt);
+// 	__u32 qid = xsk->queue_id;
 
-	if (btf_id == 0) {
-		printf("No meta BTF info (btf_id zero)\n");
-		return;
-	}
+// 	if (btf_id == 0) {
+// 		printf("No meta BTF info (btf_id zero)\n");
+// 		return;
+// 	}
 
-    printf("btf_type_id = %d\n", btf_id);
+//     printf("btf_type_id = %d\n", btf_id);
 
-	if (btf_id == xdp_hints_rx_time.btf_type_id) {
-        printf("AAA");
-		print_meta_info_time(pkt, &xdp_hints_rx_time, qid);
+// 	if (btf_id == xdp_hints_rx_time.btf_type_id) {
+//         printf("AAA");
+// 		print_meta_info_time(pkt, &xdp_hints_rx_time, qid);
 
-	} else if (btf_id == xdp_hints_mark.btf_type_id) {
-        printf("BBB");
-		print_meta_info_mark(pkt, &xdp_hints_mark, qid);
-	}
-}
+// 	} else if (btf_id == xdp_hints_mark.btf_type_id) {
+//         printf("BBB");
+// 		print_meta_info_mark(pkt, &xdp_hints_mark, qid);
+// 	}
+// }

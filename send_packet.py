@@ -10,3 +10,7 @@ wrpcap('teste.pcap', a)
 data = 'taiguara'
 a = Ether() / IP(src='10.11.1.2', dst='10.11.1.1') / TCP() / Raw(load=data)
 wrpcap('teste.pcap', a, append=True)
+
+data = 'pao'
+a = Ether() / IP(src='10.11.1.2', dst='10.11.1.1') / UDP() / Raw(load=data)
+wrpcap('teste.pcap', a, append=True)
