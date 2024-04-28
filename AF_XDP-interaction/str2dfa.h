@@ -31,7 +31,7 @@ struct protocol_port_groups_t {
 	ssize_t n_port_groups;
 };
 
-int str2dfa(char **, int, struct dfa_struct *);
-int str2dfa_fromfile(const char *, struct dfa_struct *result);
+int str2dfa(char **, size_t, struct dfa_struct *);
+// int str2dfa_fromfile(const char *, struct dfa_struct *result);
 
 #endif

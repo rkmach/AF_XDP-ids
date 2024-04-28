@@ -153,38 +153,47 @@ static __always_inline void inspect_payload(struct ids_map* ids_inspect_map, int
 
         ids_map_key.state = 0;
         ids_map_key.padding = 0;
+        // ids_map_key.unit = 'd';
 
-        // is_tcp = 1;
-        meta->mark = is_tcp;
-        meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
-
-        *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
-
-        // #pragma unroll
-        // for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
-        //     ids_unit = nh->pos;
-        //     if (ids_unit + 1 > data_end) {
-        //         /* Reach the last byte of the packet */
-        //         return;
-        //     }
-        //     ids_map_key.unit = *ids_unit;
-        //     if (ids_map_value) {
-        //         /* Go to the next state according to DFA */
-        //         ids_map_key.state = ids_map_value->state;
-        //         if (ids_map_value->flag > 0) {
-        //             /* An acceptable state, return the hit pattern number */
-        //             meta->mark = is_tcp;
-        //             meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
-
-        //             *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
-        //         }
-        //     }
-        //     /* Prepare for next scanning */
-        //     nh->pos += 1;
+        // ids_map_value = bpf_map_lookup_elem(ids_inspect_map, &ids_map_key);
+        // if (ids_map_value) {
+        //     bpf_printk("Avancei no automato   state = %d  flag = %d\n", ids_map_value->state, ids_map_value->flag);
         // }
 
-        // /* The payload is not inspected completely (!!!!!!!!!!!!!!!!!!!!)*/
-        // return;
+        // is_tcp = 1;
+        // meta->mark = is_tcp;
+        // meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
+
+        // *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
+
+        #pragma unroll
+        for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+            ids_unit = nh->pos;
+            if (ids_unit + 1 > data_end) {
+                /* Reach the last byte of the packet */
+                return;
+            }
+            ids_map_key.unit = *ids_unit;
+            ids_map_value = bpf_map_lookup_elem(ids_inspect_map, &ids_map_key);
+            if (ids_map_value) {
+                bpf_printk("%d %d\n", ids_map_key.state, ids_map_value->state);
+                /* Go to the next state according to DFA */
+                ids_map_key.state = ids_map_value->state;
+                if (ids_map_value->flag > 0) {
+                    bpf_printk("Estado final!!!\n");
+                    /* An acceptable state, return the hit pattern number */
+                    meta->mark = is_tcp;
+                    meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
+
+                    *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
+                }
+            }
+            /* Prepare for next scanning */
+            nh->pos += 1;
+        }
+
+        /* The payload is not inspected completely (!!!!!!!!!!!!!!!!!!!!)*/
+        return;
 }
 
 SEC("xdp")

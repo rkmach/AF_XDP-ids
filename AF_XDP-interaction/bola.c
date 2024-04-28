@@ -316,13 +316,19 @@ static void exit_application(int signal)
 	global_exit = true;
 }
 
+/* Follow struct declaration is for fixing the bug of bpf_map_update_elem */
+struct ids_inspect_map_update_value {
+	struct ids_inspect_map_value value;
+	uint8_t padding[8 - sizeof(struct ids_inspect_map_value)];
+};
+
 static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 {
 	struct dfa_entry *map_entries = dfa->entries;
 	uint32_t i_entry, n_entry = dfa->entry_number;
 	int i_cpu, n_cpu = libbpf_num_possible_cpus();
 	struct ids_inspect_map_key ids_map_key;
-	struct ids_inspect_map_value ids_map_values[n_cpu];
+	struct ids_inspect_map_update_value ids_map_values[n_cpu];
 	ids_inspect_state value_state;
 	accept_state_flag value_flag;
 
@@ -339,8 +345,8 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 		value_state = map_entries[i_entry].value_state;
 		value_flag = map_entries[i_entry].value_flag;
 		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
-			ids_map_values[i_cpu].state = value_state;
-			ids_map_values[i_cpu].flag = value_flag;
+			ids_map_values[i_cpu].value.state = value_state;
+			ids_map_values[i_cpu].value.flag = value_flag;
 		}
 		if (bpf_map_update_elem(ids_map_fd,
 								&ids_map_key, ids_map_values, 0) < 0) {
@@ -349,7 +355,7 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 				errno, strerror(errno));
 			return -1;
 		} else {
-			if (verbose > 1) {
+			if (true) {
 				printf("---------------------------------------------------\n");
 				// printf("New element is added in to map (%s)\n",
 				// 		ids_inspect_map_name);
@@ -385,6 +391,10 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
     // TESTAR ESSA FUNÇÂO!!!!
 	str2dfa(fast_patterns_array, len_fp_arr, &dfa);
 
+    // for(int k = 0; k < dfa.entry_number; k++){
+    //     printf("entries[%d]:  (%d, %c)  (%d, %d)\n", k, dfa.entries[k].key_state, dfa.entries[k].key_unit, dfa.entries[k].value_state, dfa.entries[k].value_flag);
+    // }
+
 	struct port_map_key key;
 	key.src_port = src;
 	key.dst_port = dst;
@@ -399,7 +409,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 
     // pega o mapa correto e adiciona o DFA recém criado
     sprintf(map_name, "ids_map%d", *index);
-    
+    printf("\nColocando esse automato no mapa %s\n", map_name);
     int ids_map_fd = open_bpf_map_file(pin_dir, map_name, NULL);
     if (ids_map_fd < 0) {
         fprintf(stderr,
@@ -630,7 +640,7 @@ int main(int argc, char **argv)
     cfg.xsk_bind_flags = XDP_COPY;
 
     struct bpf_object *bpf_obj = NULL;
-	// struct bpf_map *map;
+	struct bpf_map *map;
 
     /* Global shutdown handler */
 	signal(SIGINT, exit_application);
@@ -702,8 +712,9 @@ int main(int argc, char **argv)
     /* --- In this moment, every possible DFA has been filled --- */
 
     /* We also need to load the xsks_map */
-    // map = bpf_object__find_map_by_name(bpf_obj, "xsks_map");
-    xsks_map_fd = open_bpf_map_file(pin_dir, "xsks_map", NULL);
+    map = bpf_object__find_map_by_name(bpf_obj, "xsks_map");
+    // xsks_map_fd = open_bpf_map_file(pin_dir, "xsks_map", NULL);
+    xsks_map_fd = bpf_map__fd(map);
     if (xsks_map_fd < 0) {
         fprintf(stderr, "ERROR: no xsks map found: %s\n",
             strerror(xsks_map_fd));
