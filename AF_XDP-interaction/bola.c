@@ -199,9 +199,10 @@ static void apply_setsockopt(struct xsk_socket_info *xsk, bool opt_busy_poll,
 void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
     int offset;
+	uint32_t global_map_index;
 
-    offset = is_tcp(pkt, &xdp_hints_mark) ? 54 : 42;
-	
+    offset = is_tcp(pkt, &xdp_hints_mark, &global_map_index) ? 54 : 42;
+
     char* first_char_payload = NULL;
     first_char_payload = (char*) pkt + offset;
     if (!first_char_payload)
@@ -388,7 +389,6 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
     const char *pin_dir = "/sys/fs/bpf/amigo";  //MUDAR
 
     /* In this moment, every pattern in the port group has been collected, so it's possible to create dfas */
-    // TESTAR ESSA FUNÇÂO!!!!
 	str2dfa(fast_patterns_array, len_fp_arr, &dfa);
 
     // for(int k = 0; k < dfa.entry_number; k++){
@@ -530,11 +530,6 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 		}
     	port_groups[pgs_index] = current_port_group;
   		rule_index = 0;
-
-		// for(int k = 0; k < index_fp; k++){
-		// 	printf("%s\n", fast_patterns_array[k]);
-		// }
-		// printf("\n");
 
         if (initialize_fast_pattern_port_group_map(port_map_fd, &pgs_index, current_port_group->src_port,
                 current_port_group->dst_port, fast_patterns_array, index_fp) < 0) {

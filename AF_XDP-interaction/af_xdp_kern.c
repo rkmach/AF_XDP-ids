@@ -80,6 +80,7 @@ struct port_map_t {
  */
 struct xdp_hints_mark {
 	__u32 mark;
+    __u32 global_map_index;
 	__u32 btf_id;
 } __attribute__((aligned(4))) __attribute__((packed));
 
@@ -263,8 +264,10 @@ int xdp_ids_func(struct xdp_md *ctx)
 pg_found:
     bpf_printk("port_map_value = %d", *port_map_value);
     struct ids_map* map = bpf_map_lookup_elem(&global_map, port_map_value);
-    if(map)
+    if(map){
+        meta->global_map_index = *port_map_value;
         inspect_payload(map, is_tcp, &nh, data_end, rx_queue_index, &action, meta);
+    }
     else
         action = XDP_DROP;
 
