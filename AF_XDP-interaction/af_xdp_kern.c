@@ -37,7 +37,7 @@ struct ids_map {
     __type(value, struct ids_inspect_map_value);
 } ids_map0 SEC(".maps"), ids_map1 SEC(".maps"), ids_map2 SEC(".maps"), ids_map3 SEC(".maps"), ids_map4 SEC(".maps"), ids_map5 SEC(".maps"), ids_map6 SEC(".maps"), ids_map7 SEC(".maps"), ids_map8 SEC(".maps");
 
-struct {
+struct global_map_t {
     __uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
     __type(key, __u32);
     __uint(max_entries, 10);
@@ -54,7 +54,7 @@ struct {
                 &ids_map8 }
 };
 
-struct {
+struct port_map_t {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, PORT_RANGE);
     __type(key, struct port_map_key);
@@ -89,60 +89,6 @@ struct xdp_hints_rx_time {
 	__u32 btf_id;
 } __attribute__((aligned(4))) __attribute__((packed));
 
-// int meta_add_rx_time(struct xdp_md *ctx)
-// {
-// 	struct xdp_hints_rx_time *meta;
-// 	void *data;
-// 	int err;
-
-// 	/* Reserve space in-front of data pointer for our meta info.
-// 	 * (Notice drivers not supporting data_meta will fail here!)
-// 	 */
-// 	err = bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta));
-// 	if (err)
-// 		return -1;
-
-// 	/* Notice: Kernel-side verifier requires that loading of
-// 	 * ctx->data MUST happen _after_ helper bpf_xdp_adjust_meta(),
-// 	 * as pkt-data pointers are invalidated.  Helpers that require
-// 	 * this are determined/marked by bpf_helper_changes_pkt_data()
-// 	 */
-// 	data = (void *)(unsigned long)ctx->data;
-
-// 	meta = (void *)(unsigned long)ctx->data_meta;
-// 	if (meta + 1 > data) /* Verify meta area is accessible */
-// 		return -2;
-
-// 	meta->rx_ktime = bpf_ktime_get_ns();
-// 	meta->xdp_rx_cpu = bpf_get_smp_processor_id();
-// 	/* Userspace can identify struct used by BTF id */
-// 	meta->btf_id = bpf_core_type_id_local(struct xdp_hints_rx_time);
-
-// 	return 0;
-// }
-
-// int meta_add_mark(struct xdp_md *ctx, __u32 mark)
-// {
-// 	struct xdp_hints_mark *meta;
-// 	void *data;
-// 	int err;
-
-// 	/* Reserve space in-front of data pointer for our meta info */
-// 	err = bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta));
-// 	if (err)
-// 		return -1;
-
-// 	data = (void *)(unsigned long)ctx->data;
-// 	meta = (void *)(unsigned long)ctx->data_meta;
-// 	if (meta + 1 > data) /* Verify meta area is accessible */
-// 		return -2;
-
-// 	meta->mark = mark;
-// 	meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
-
-// 	return 0;
-// }
-
 static __always_inline void inspect_payload(struct ids_map* ids_inspect_map, int is_tcp, struct hdr_cursor *nh, void *data_end,
         __u32 queue_idx, __u32* action, struct xdp_hints_mark* meta)
 {
@@ -153,18 +99,6 @@ static __always_inline void inspect_payload(struct ids_map* ids_inspect_map, int
 
         ids_map_key.state = 0;
         ids_map_key.padding = 0;
-        // ids_map_key.unit = 'd';
-
-        // ids_map_value = bpf_map_lookup_elem(ids_inspect_map, &ids_map_key);
-        // if (ids_map_value) {
-        //     bpf_printk("Avancei no automato   state = %d  flag = %d\n", ids_map_value->state, ids_map_value->flag);
-        // }
-
-        // is_tcp = 1;
-        // meta->mark = is_tcp;
-        // meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
-
-        // *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
 
         #pragma unroll
         for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
@@ -205,14 +139,14 @@ int xdp_ids_func(struct xdp_md *ctx)
 	err = bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta));
 
 	if (err)
-		return -1;
+		return XDP_DROP;
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
     __u32 rx_queue_index = ctx->rx_queue_index;
 
     meta = (void *)(unsigned long)ctx->data_meta;
     if (meta + 1 > data) /* Verify meta area is accessible */
-        return -2;
+        return XDP_DROP;
 
     __u32 action = XDP_PASS; /* Default action */
 
@@ -225,6 +159,11 @@ int xdp_ids_func(struct xdp_md *ctx)
     struct udphdr *udph;
     struct tcphdr *tcph;
     int is_tcp = 0;
+    src_port_t pkt_src_port;
+
+    // __u16 src_port, dst_port;
+    struct port_map_key port_map_key;
+    __u32* port_map_value = NULL;
 
     nh.pos = data;
     eth_type = parse_ethhdr(&nh, data_end, &eth);
@@ -243,16 +182,91 @@ int xdp_ids_func(struct xdp_md *ctx)
             goto out;
         }
         is_tcp = 1;
+        port_map_key.src_port = bpf_ntohs(tcph->source);
+        port_map_key.dst_port = bpf_ntohs(tcph->dest);
+
+        // se não houver chave no mapa para esse par de portas, nem precisa processar o pacote
+
+        // Primeiro, testa com as portas que estão no pacote
+        port_map_value = bpf_map_lookup_elem(&tcp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (sport, dport) (do pacote)
+            goto pg_found;
+        
+        pkt_src_port = port_map_key.src_port;
+
+        // se não achei, vou procurar por (any, dport)
+        port_map_key.src_port = 0;
+        port_map_value = bpf_map_lookup_elem(&tcp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (any, dport)
+            goto pg_found;
+
+        // se não achei, vou procurar por (sport, any)
+        port_map_key.src_port = pkt_src_port;
+        port_map_key.dst_port = 0;
+        port_map_value = bpf_map_lookup_elem(&tcp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (sport, any)
+            goto pg_found;
+
+        // se não achei, vou procurar por (any, any)
+        port_map_key.src_port = 0;
+        port_map_key.dst_port = 0;
+        port_map_value = bpf_map_lookup_elem(&tcp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (any, any)
+            goto pg_found;
+
+        if(!port_map_value)
+            return XDP_DROP;
+
     } else if (ip_type == IPPROTO_UDP) {
         if (parse_udphdr(&nh, data_end, &udph) < 0) {
             action = XDP_ABORTED;
             goto out;
         }
+        port_map_key.src_port = bpf_ntohs(udph->source);
+        port_map_key.dst_port = bpf_ntohs(udph->dest);
+
+        // se não houver chave no mapa para esse par de portas, nem precisa processar o pacote
+        
+        // Primeiro, testa com as portas que estão no pacote
+        port_map_value = bpf_map_lookup_elem(&udp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (sport, dport) (do pacote)
+            goto pg_found;
+        
+        pkt_src_port = port_map_key.src_port;
+        // dst_port_t pkt_dst_port = port_map_key->dst_port;
+
+        // se não achei, vou procurar por (any, dport)
+        port_map_key.src_port = 0;
+        port_map_value = bpf_map_lookup_elem(&udp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (any, dport)
+            goto pg_found;
+
+        // se não achei, vou procurar por (sport, any)
+        port_map_key.src_port = pkt_src_port;
+        port_map_key.dst_port = 0;
+        port_map_value = bpf_map_lookup_elem(&udp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (sport, any)
+            goto pg_found;
+
+        // se não achei, vou procurar por (any, any)
+        port_map_key.src_port = 0;
+        port_map_key.dst_port = 0;
+        port_map_value = bpf_map_lookup_elem(&udp_port_map, &port_map_key);
+        if(port_map_value)  // achei o port group (any, any)
+            goto pg_found;
+
+        if(!port_map_value)
+            return XDP_DROP;
     } else {
             goto out;
     }
-
-    inspect_payload(&ids_map0, is_tcp, &nh, data_end, rx_queue_index, &action, meta);
+pg_found:
+    bpf_printk("port_map_value = %d", *port_map_value);
+    struct ids_map* map = bpf_map_lookup_elem(&global_map, port_map_value);
+    if(map)
+        inspect_payload(map, is_tcp, &nh, data_end, rx_queue_index, &action, meta);
+    else
+        action = XDP_DROP;
 
 out:
     return action;

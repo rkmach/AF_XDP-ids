@@ -1,1 +1,6 @@
-any;80~amigo;989~dd;4
+any;80~/sensepost.exe;989~dd;4
+any;22222~WINDIR;3010;lagoa,peixe~SYSDIR;3011~forro;2024;samba,sertacore~dd;4
+22;567~aa;1~bb;2~cc;3~dd;4
+any;567~bb;2~dd;4
+22;any~cc;3~dd;4
+any;any~dd;4
