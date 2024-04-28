@@ -35,6 +35,7 @@ struct ids_inspect_map_key {
 struct ids_inspect_map_value {
 	ids_inspect_state state;
 	accept_state_flag flag;
+	int16_t fp__rule_index;
 };
 
 #endif /* __COMMON_KERN_USER_H */

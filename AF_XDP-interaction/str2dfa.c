@@ -44,15 +44,18 @@ int get_num_lines(const char *filename){
 }
 
 // essa função recebe o automato recém alocado e o arquivo que representa o autômato. Inicia os campos entries e entry_number do dfa
-int str2dfa(char **patterns, size_t p_len, struct dfa_struct *result) {
+int str2dfa(struct fast_p* fast_patterns_array, size_t p_len, struct dfa_struct *result) {
+
+    char* fps[p_len];
+	for(int i = 0; i < p_len; i++){
+		fps[i] = fast_patterns_array[i].fp;
+	}
 
 	// escreve os fast pattern linha a linha no arquivo data.txt
-	write_strings_to_file("data.txt", patterns, p_len);
+	write_strings_to_file("data.txt", fps, p_len);
 
 	// chama python script para criar o automato
 	system("python3 str2dfa.py data.txt > pats.txt");
-
-	sleep(1);
 
 	int n_entry = get_num_lines("pats.txt");
 
@@ -65,22 +68,81 @@ int str2dfa(char **patterns, size_t p_len, struct dfa_struct *result) {
     }
 
 	struct dfa_entry *entries = (struct dfa_entry *)malloc(sizeof(struct dfa_entry) * n_entry);
-	char line[64];
-	int i = 0;
+	char line[1024];
+	int i = 0, j;
 
 	int key_s, value_s, value_f;
 	char key_unit;
+    char padrao[256];
 
     while (fgets(line, sizeof(line), file)) {
         // Parse the line
-        sscanf(line, "((%d, b'%c'), (%d, %d))", &key_s, &key_unit, 
-				&value_s, &value_f);
+        sscanf(line, "%d,%c,%d,%d,%s", &key_s, &key_unit, 
+				&value_s, &value_f, padrao);
 
 		entries[i].key_state = (uint16_t)key_s;
 		entries[i].key_unit = (uint8_t)key_unit;
 		entries[i].value_state = (uint16_t)value_s;
 		entries[i].value_flag = (uint16_t)value_f;
 
+        if(strcmp(padrao, "~") != 0){
+            for(j = 0; j < p_len; j++){
+                if(strcmp(padrao, fast_patterns_array[j].fp) == 0){
+                    entries[i].fp__rule_index = j;  // coloca o índice do vetor de regras para este port group
+                }
+            }
+        }
+        else{
+            entries[i].fp__rule_index = -1;  // significa que não é um estado final
+        }
+
+        i++;
+    }
+	result->entry_number = n_entry;
+	result->entries = entries;
+    // Close the file
+    fclose(file);			
+	return 0;
+}
+
+// essa função recebe o automato recém alocado e o arquivo que representa o autômato. Inicia os campos entries e entry_number do dfa
+int str2dfa__to_contents(char** contents_array, size_t p_len, struct dfa_struct *result) {
+
+	// escreve os fast pattern linha a linha no arquivo data.txt
+	write_strings_to_file("data.txt", contents_array, p_len);
+
+	// chama python script para criar o automato
+	system("python3 str2dfa.py data.txt > pats.txt");
+
+	int n_entry = get_num_lines("pats.txt");
+
+	// preenche a struct dfa_struct
+	// Open the file
+    FILE *file = fopen("pats.txt", "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error opening file.\n");
+        return 1;
+    }
+
+	struct dfa_entry *entries = (struct dfa_entry *)malloc(sizeof(struct dfa_entry) * n_entry);
+	char line[1024];
+	int i = 0, j;
+
+	int key_s, value_s, value_f;
+	char key_unit;
+    char padrao[256];
+
+    while (fgets(line, sizeof(line), file)) {
+        // Parse the line
+        sscanf(line, "%d,%c,%d,%d,%s", &key_s, &key_unit, 
+				&value_s, &value_f, padrao);
+
+		entries[i].key_state = (uint16_t)key_s;
+		entries[i].key_unit = (uint8_t)key_unit;
+		entries[i].value_state = (uint16_t)value_s;
+		entries[i].value_flag = (uint16_t)value_f;
+
+        entries[i].fp__rule_index = -1;  // significa que não é um estado final
         i++;
     }
 	result->entry_number = n_entry;

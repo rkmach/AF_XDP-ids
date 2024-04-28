@@ -10,24 +10,30 @@ class DFAMatchEntriesGenerator():
         pattern_number = 0
         self.stride = stride
         self.table_id = table_id
+        self.pattern_list = pattern_list
         self.automaton = ahocorasick.Automaton(ahocorasick.STORE_LENGTH)
-        if type(pattern_list) == list:
-            for pattern in pattern_list:
-                # print("Get pattern of length %d: %s" % (len(pattern), pattern))
-                self.automaton.add_word(pattern)
-                pattern_number += 1
-            # print("\nTotal %d patterns loaded\n" % pattern_number)
-        elif type(pattern_list) == str:
-            pattern_file = open(pattern_list, 'r')
-            for pattern in pattern_file.readlines():
-                pattern = pattern[:-1]
-                # print("Get pattern of length %d: %s" % (len(pattern), pattern))
-                self.automaton.add_word(pattern)
-                pattern_number += 1
-            # print("\nTotal %d patterns loaded from file %s\n" % \
-            #       (pattern_number, pattern_list))
+        with open('pattern_id.txt', 'w') as the_file:
+            if type(pattern_list) == list:
+                for pattern in pattern_list:
+                    self.automaton.add_word(pattern)
+                    pattern_number += 1
+                    to_file = str(pattern) + ' ' + str(pattern_number) + '\n'
+                    the_file.write(to_file)
+                # print("\nTotal %d patterns loaded\n" % pattern_number)
+            elif type(pattern_list) == str:
+                pattern_file = open(pattern_list, 'r')
+                for pattern in pattern_file.readlines():
+                    pattern = pattern[:-1]
+                    print("Get pattern of length %d: %s" % (len(pattern), pattern))
+                    self.automaton.add_word(pattern)
+                    pattern_number += 1
+                    to_file = str(pattern) + ' ' + str(pattern_number) + '\n'
+                    the_file.write(to_file)
+                # print("\nTotal %d patterns loaded from file %s\n" % \
+                #     (pattern_number, pattern_list))
+            the_file.close()
         self.automaton.make_automaton()
-        # Gegerate dfa descriptor according to the automaton
+        # Generate DFA descriptor according to the automaton
         self.dfa = self.generate_dfa(self.automaton.dump())
         self.msdfa = self.generate_multi_stride_dfa(self.dfa, self.stride)
         self.mat_entries = self.generate_mat_entries(self.msdfa)
@@ -66,15 +72,10 @@ class DFAMatchEntriesGenerator():
             start_node_id = converse_dict[failure_link[0]]
             intermediate_node_id = converse_dict[failure_link[1]]
             dfa_failure_links.append((start_node_id, intermediate_node_id))
-            # # Below condition statements indicate what we care about is 
-            # # the input whether hit one of the patterns, not all patterns
-            # if dfa_nodes[start_node_id] ! = 0:
-                # continue
             for next_node in dfa_next_nodes[intermediate_node_id]:
                 transfer_char = next_node[0]
                 end_node_id = next_node[1]
                 cover_flag = False
-                # Check whether this failure link endge is valid
                 for origin_next_node in dfa_next_nodes[start_node_id]:
                     existing_transfer_char = origin_next_node[0]
                     cover_flag = True
@@ -99,7 +100,6 @@ class DFAMatchEntriesGenerator():
         for dfa_node_id in dfa_nodes:
             dfa_next_nodes_extend[dfa_node_id] = dfa_next_nodes[dfa_node_id][:]
             msdfa_next_nodes[dfa_node_id] = []
-        # Extend single stride DFA first
         for (start_node_id, transfer_char, end_node_id, type) in dfa_edges:
             if start_node_id == 0 and type == 1:
                 for star_num in range(1, stride):
@@ -113,26 +113,19 @@ class DFAMatchEntriesGenerator():
                     dfa_next_nodes_extend[start_node_id].append(
                         (transfer_chars, end_node_id)
                     )
-        # Get all transistion edges of multi-stride DFA
         for dfa_node in dfa_nodes:
             start_node_id = dfa_node
             self.find_multi_stride_edges(
                 msdfa_edges, msdfa_next_nodes, dfa_next_nodes_extend, \
                 start_node_id, b'', start_node_id, stride
             )
-        # Process failure links finally
         for failure_link in dfa_failure_links:
             start_node_id = failure_link[0]
-            # # Below condition statements indicate what we care about is 
-            # # the input whether hit one of the patterns, not all patterns
-            # if msdfa_next_nodes[start_node_id] != 0:
-                # continue
             intermediate_node_id = failure_link[1]
             for next_node in msdfa_next_nodes[intermediate_node_id]:
                 transfer_chars = next_node[0]
                 end_node_id = next_node[1]
                 cover_flag = False
-                # Check whether this failure link endge is valid
                 for origin_next_node in msdfa_next_nodes[start_node_id]:
                     existing_path = origin_next_node[0]
                     cover_flag = True
@@ -174,18 +167,17 @@ class DFAMatchEntriesGenerator():
         msdfa_nodes = msdfa_descriptor[0]
         msdfa_edges = msdfa_descriptor[1]
         mat_entries = []
+        cont = 1
         for (current_state, received_chars, next_state, type) in msdfa_edges:
             match = (current_state, received_chars)
-            # if msdfa_nodes[next_state] != 0:
-                # action = 'accept'
-            # else:
-                # action = 'goto'
-            action = 'goto'
             modifier = 0
+            matched_pattern = '~'
             if msdfa_nodes[next_state] != 0:
-                modifier = 1 << (msdfa_nodes[next_state] - 1)
-            action_params = (next_state, modifier)
-            mat_entries.append((match, action, action_params))
+                modifier = cont
+                cont += 1
+                matched_pattern = self.pattern_list[msdfa_nodes[next_state] - 1]
+            action_params = (next_state, modifier, matched_pattern)
+            mat_entries.append((match, action_params))
         return mat_entries
 
     def generate_key_value_entries(self, msdfa_descriptor):
@@ -214,11 +206,15 @@ class DFAMatchEntriesGenerator():
         return self.key_value_entries
 
 def str2dfa(pattern_list):
-    entries_generator = DFAMatchEntriesGenerator(pattern_list, 1)
-    return entries_generator.get_key_value_entries()
+    patterns = []
+    if type(pattern_list) == str:
+        pattern_file = open(pattern_list, 'r')
+        for pattern in pattern_file.readlines():
+            patterns.append(pattern[:-1])
+    entries_generator = DFAMatchEntriesGenerator(patterns, 1)
+    return entries_generator.get_mat_entries()
 
 if __name__ == '__main__':
-    file_name = sys.argv[1]
-    x = DFAMatchEntriesGenerator(file_name, 1)
-    for i in x.get_key_value_entries():
-        print(i)
+    x = str2dfa(sys.argv[1])
+    for i in x:
+        print(f"{i[0][0]},{(i[0][1]).decode('utf-8')},{i[1][0]},{i[1][1]},{i[1][2]}")

@@ -55,6 +55,7 @@
 
 #include "str2dfa.h"
 #include "common_kern_user.h"
+#include "hashmap.h"
 
 #define NUM_FRAMES         4096 /* Frames per queue */
 #define FRAME_SIZE         XSK_UMEM__DEFAULT_FRAME_SIZE /* 4096 */
@@ -323,6 +324,58 @@ struct ids_inspect_map_update_value {
 	uint8_t padding[8 - sizeof(struct ids_inspect_map_value)];
 };
 
+static size_t __xsk_hash_fn(const void *key, void *ctx)
+{
+	/* Note that, the hashmap used to speed-up offset location into the BTF
+	 * doesn't use the field name as a string as key to the hashmap. It
+	 * directly uses the pointer value instead, as it is expected that most
+	 * of time, field names will be addressed by a shared constant string
+	 * residing on read-only memory, thus saving some time. If this
+	 * assumption is not entirely true, this optimisation needs to be
+	 * rethought (or discarded altogether).
+	 */
+	return (size_t)key;
+}
+
+static bool __xsk_equal_fn(const void *k1, const void *k2, void *ctx)
+{
+	return k1 == k2;
+}
+
+static void create_dfa_per_rule(struct rule_t* rule, struct dfa_struct* dfa){
+
+	// inicia a hash
+    _hashmap__init(&(rule->dfa), __xsk_hash_fn, __xsk_equal_fn, NULL);
+
+	uint32_t i_entry, n_entry = dfa->entry_number;
+	struct ids_inspect_map_key key;
+	struct ids_inspect_map_value* value = malloc(sizeof(struct ids_inspect_map_value*));
+
+	/* Initial */
+	key.padding = 0;
+
+	/* Convert dfa to hashmap */
+	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+		key.state = dfa->entries[i_entry].key_state;
+		key.unit = dfa->entries[i_entry].key_unit;
+		value->state = dfa->entries[i_entry].value_state;
+		value->flag = dfa->entries[i_entry].value_flag;
+		printf("a\n");
+		hashmap__add(&(rule->dfa), &key, value);
+	}
+}
+
+static void free_hash(struct rule_t* rule)
+{
+	struct hashmap_entry *entry;
+	int i;
+
+	hashmap__for_each_entry((&(rule->dfa)), entry, i) {
+		free(entry->value);
+	}
+	_hashmap__clear(&(rule)->dfa);
+}
+
 static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 {
 	struct dfa_entry *map_entries = dfa->entries;
@@ -332,6 +385,7 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 	struct ids_inspect_map_update_value ids_map_values[n_cpu];
 	ids_inspect_state value_state;
 	accept_state_flag value_flag;
+	int16_t rule_index;
 
 	printf("Number of CPUs: %d\n\n", n_cpu);
 
@@ -345,9 +399,11 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 		ids_map_key.unit = map_entries[i_entry].key_unit;
 		value_state = map_entries[i_entry].value_state;
 		value_flag = map_entries[i_entry].value_flag;
+		rule_index = map_entries[i_entry].fp__rule_index;
 		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
 			ids_map_values[i_cpu].value.state = value_state;
 			ids_map_values[i_cpu].value.flag = value_flag;
+			ids_map_values[i_cpu].value.fp__rule_index = rule_index;
 		}
 		if (bpf_map_update_elem(ids_map_fd,
 								&ids_map_key, ids_map_values, 0) < 0) {
@@ -362,8 +418,8 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 				// 		ids_inspect_map_name);
 				printf("Key - state: %d, unit: %c\n",
 						ids_map_key.state, ids_map_key.unit);
-				printf("Value - state: %d, flag: %d\n",
-						value_state, value_flag);
+				printf("Value - state: %d, flag: %d, rule_index: %d\n",
+						value_state, value_flag, rule_index);
 				printf("---------------------------------------------------\n");
 			}
 		}
@@ -381,7 +437,7 @@ void check_end_line(char* token){
 }
 
 int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t src, uint16_t dst,
-    char** fast_patterns_array, size_t len_fp_arr)
+    struct fast_p* fast_patterns_array, size_t len_fp_arr)
 {
     char map_name[24];
     struct dfa_struct dfa;
@@ -391,9 +447,10 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
     /* In this moment, every pattern in the port group has been collected, so it's possible to create dfas */
 	str2dfa(fast_patterns_array, len_fp_arr, &dfa);
 
-    // for(int k = 0; k < dfa.entry_number; k++){
-    //     printf("entries[%d]:  (%d, %c)  (%d, %d)\n", k, dfa.entries[k].key_state, dfa.entries[k].key_unit, dfa.entries[k].value_state, dfa.entries[k].value_flag);
-    // }
+    for(int k = 0; k < dfa.entry_number; k++){
+        printf("entries[%d]:  (%d, %c)  (%d, %d, %d)\n", k, dfa.entries[k].key_state, dfa.entries[k].key_unit, 
+			dfa.entries[k].value_state, dfa.entries[k].value_flag, dfa.entries[k].fp__rule_index);
+    }
 
 	struct port_map_key key;
 	key.src_port = src;
@@ -436,17 +493,18 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 	char* subtoken, *aux_subtoken;
 	struct port_group_t* current_port_group;
 	struct rule_t* rule;
-	int rule_index = 0, n_contents = 0, pgs_index = 0;
+	int rule_index = 0, pgs_index = 0;
 	uint64_t fast_pattern;
 	uint32_t sid;
 	int M = 500;
 	int N = 500;
+	struct dfa_struct per_rule_dfa;
 
-	char* fast_patterns_array[300];
+	struct fast_p fast_patterns_array[300];
 	size_t index_fp = 0;
 
-	// char* regular_patterns_array[600];
-	// int index_rp = 0;
+	char* rule_contents[600];
+	int index_rule_contents = 0;
 
 	file = fopen(rules_file, "r");
 	if (file == NULL) {
@@ -494,7 +552,7 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 			inner_token = __strtok_r(token, ";", &aux_inner_token);
 
 			// add fp in array
-			fast_patterns_array[index_fp++] = inner_token;
+			fast_patterns_array[index_fp].fp = inner_token;
 
 			fast_pattern = hash((unsigned char*)inner_token);
 			inner_token = __strtok_r(NULL, ";", &aux_inner_token);
@@ -513,18 +571,31 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 
 				// regular_patterns_array[index_rp++] = subtoken;
 
-				rule->contents[n_contents++] = hash((unsigned char*)subtoken);
+				rule_contents[index_rule_contents++] = subtoken;
 				subtoken = __strtok_r(NULL, ",", &aux_subtoken);
 				}
-				rule->n_contents = n_contents;
+				rule->n_contents++;
 			}
 			else{
 				rule->n_contents = 0;
 			}
-			n_contents = 0;
+
+			// aqui, já tenho todos os contents da regra no vetor rule_contents (vetor de strings)
+			// preencher o automato pra esses contents
+			if(index_rule_contents > 0){
+				str2dfa__to_contents(rule_contents, index_rule_contents, &per_rule_dfa);
+				// settar o automato na regra
+				create_dfa_per_rule(rule, &per_rule_dfa);
+				free(per_rule_dfa.entries);
+			}
+			fast_patterns_array[index_fp].idx = rule_index;
+			index_fp++;
+
 			current_port_group->rules[rule_index] = rule;
+			
 			rule_index++;
 			current_port_group->n_rules++;
+			index_rule_contents = 0;
 
 			token = __strtok_r(NULL, "~", &aux_token);
 		}
@@ -538,8 +609,6 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
                 errno, strerror(errno));
             return NULL;
         }
-		// CRIAR DFA dos outros padrões tbm!!
-
 		pgs_index++;
 		index_fp = 0;
 
@@ -553,6 +622,8 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 void destroy_port_groups(struct protocol_port_groups_t* protocol_port_group){
 	for(ssize_t i = 0; i < protocol_port_group->n_port_groups; i++){
 		for (ssize_t j = 0; j < protocol_port_group->port_groups_array[i]->n_rules; j++){
+			if(protocol_port_group->port_groups_array[i]->rules[j]->n_contents > 0)
+				free_hash(protocol_port_group->port_groups_array[i]->rules[j]);
 			free(protocol_port_group->port_groups_array[i]->rules[j]);
 		}
         free(protocol_port_group->port_groups_array[i]->rules);
@@ -747,5 +818,6 @@ int main(int argc, char **argv)
     free(xsk_sockets);
     destroy_port_groups(&tcp_port_groups);
     xdp_link_detach(cfg.ifindex, cfg.xdp_flags, 0);
+
     return 0;
 }

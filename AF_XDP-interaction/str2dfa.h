@@ -13,6 +13,7 @@ struct dfa_entry {
 	uint8_t key_unit;
 	uint16_t value_state;
 	uint16_t value_flag;
+	int16_t fp__rule_index;
 };
 
 struct port_group_t {
@@ -31,7 +32,7 @@ struct protocol_port_groups_t {
 	ssize_t n_port_groups;
 };
 
-int str2dfa(char **, size_t, struct dfa_struct *);
-// int str2dfa_fromfile(const char *, struct dfa_struct *result);
+int str2dfa(struct fast_p* , size_t, struct dfa_struct *);
+int str2dfa__to_contents(char** , size_t, struct dfa_struct *);
 
 #endif
