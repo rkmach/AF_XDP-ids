@@ -201,8 +201,11 @@ void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
     int offset;
 	uint32_t global_map_index;
+	int16_t rule_index;
 
-    offset = is_tcp(pkt, &xdp_hints_mark, &global_map_index) ? 54 : 42;
+    offset = is_tcp(pkt, &xdp_hints_mark, &global_map_index, &rule_index) ? 54 : 42;
+
+	// printf("rule_index = %d", rule_index);
 
     char* first_char_payload = NULL;
     first_char_payload = (char*) pkt + offset;

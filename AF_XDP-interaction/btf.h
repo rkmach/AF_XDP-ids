@@ -24,11 +24,12 @@ struct xdp_hints_mark {
 	struct xsk_btf_info *xbi;
 	struct xsk_btf_member mark;
 	struct xsk_btf_member global_map_index;
+	struct xsk_btf_member rule_index;
 };
 
 struct xsk_btf_info *setup_btf_info(struct btf *btf, const char *struct_name);
 int init_btf_info_via_bpf_object(struct bpf_object *bpf_obj, struct xdp_hints_mark* xdp_hints_mark);
-bool is_tcp(uint8_t *pkt, struct xdp_hints_mark *meta, uint32_t* global_map_index);
+bool is_tcp(uint8_t *pkt, struct xdp_hints_mark *meta, uint32_t* global_map_index, int16_t* rule_index);
 
 
 #endif

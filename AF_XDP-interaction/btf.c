@@ -60,6 +60,8 @@ int init_btf_info_via_bpf_object(struct bpf_object *bpf_obj, struct xdp_hints_ma
 			return -EBADSLT;
 		if (!xsk_btf__field_member("global_map_index", xbi, &xdp_hints_mark->global_map_index))
 			return -EBADSLT;
+		if (!xsk_btf__field_member("rule_index", xbi, &xdp_hints_mark->rule_index))
+			return -EBADSLT;
 		xdp_hints_mark->btf_type_id = xsk_btf__btf_type_id(xbi);
 		xdp_hints_mark->xbi = xbi;
 	}
@@ -121,15 +123,19 @@ int print_meta_info_time(uint8_t *pkt, struct xdp_hints_rx_time *meta,
 	return 0;
 }
 
-bool is_tcp(uint8_t *pkt, struct xdp_hints_mark *meta, uint32_t* global_map_index){
+bool is_tcp(uint8_t *pkt, struct xdp_hints_mark *meta, uint32_t* global_map_index, int16_t* rule_index){
     struct xsk_btf_info *xbi = meta->xbi;
 	__u32 mark = 3;
 	__u32 index = 99;
+	__u32 r_index = 9;
 
 	/* The 'mark' value is not updated in case of errors */
 	XSK_BTF_READ_INTO(mark, &meta->mark, xbi, pkt);
 	XSK_BTF_READ_INTO(index, &meta->global_map_index, xbi, pkt);
+	XSK_BTF_READ_INTO(r_index, &meta->rule_index, xbi, pkt);
 	*global_map_index = index;
+	printf("rule_index = %d\n", r_index);
+	*rule_index = r_index;
     if(mark == 1)
         return true;
     return false;

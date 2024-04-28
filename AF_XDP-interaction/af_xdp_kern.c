@@ -81,6 +81,7 @@ struct port_map_t {
 struct xdp_hints_mark {
 	__u32 mark;
     __u32 global_map_index;
+    __u32 rule_index;
 	__u32 btf_id;
 } __attribute__((aligned(4))) __attribute__((packed));
 
@@ -115,8 +116,9 @@ static __always_inline void inspect_payload(struct ids_map* ids_inspect_map, int
                 /* Go to the next state according to DFA */
                 ids_map_key.state = ids_map_value->state;
                 if (ids_map_value->flag > 0) {
-                    bpf_printk("Estado final!!!\n");
+                    bpf_printk("rule_index = %d\n", ids_map_value->fp__rule_index);
                     /* An acceptable state, return the hit pattern number */
+                    meta->rule_index = ids_map_value->fp__rule_index;
                     meta->mark = is_tcp;
                     meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
 
