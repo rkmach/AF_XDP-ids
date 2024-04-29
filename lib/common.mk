@@ -53,13 +53,7 @@ LDFLAGS += -L$(LIB_DIR)/install/lib
 
 BPF_HEADERS := $(wildcard $(HEADER_DIR)/*/*.h) $(wildcard $(INCLUDE_DIR)/*/*.h)
 
-all: str2dfa.o $(USER_TARGETS) $(BPF_OBJ) $(EXTRA_TARGETS) $(BPF_SKEL)
-
-SPEC_FLAGS ?= -I/usr/include/python3.10
-SPEC_LIBS ?= -lpython3.10
-
-str2dfa.o: str2dfa.c str2dfa.h str2dfa.py
-	$(CC) $(SPEC_FLAGS) $< -c -o $@ $(SPEC_LIBS)
+all: $(USER_TARGETS) $(BPF_OBJ) $(EXTRA_TARGETS) $(BPF_SKEL)
 
 .PHONY: clean
 clean::
@@ -84,8 +78,6 @@ $(LIB_OBJS): %.o: %.c %.h $(LIB_H)
 # Allows including Makefile to define USER_TARGETS_OBJS to compile and link with
 $(USER_TARGETS_OBJS): %.o: %.c %.h  $(USER_TARGETS_OBJS_DEPS)
 	$(QUIET_CC)$(CC) $(CFLAGS) -Wall -c -o $@ $<
-
-USER_TARGETS_OBJS += str2dfa.o
 
 $(USER_TARGETS): %: %.c  $(OBJECT_LIBBPF) $(OBJECT_LIBXDP) $(LIBMK) $(LIB_OBJS) $(KERN_USER_H) $(EXTRA_DEPS) $(EXTRA_USER_DEPS) $(BPF_SKEL) $(USER_TARGETS_OBJS)
 	$(QUIET_CC)$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(LIB_OBJS) $(USER_TARGETS_OBJS) \

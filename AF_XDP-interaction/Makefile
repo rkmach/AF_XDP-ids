@@ -14,6 +14,8 @@ USER_TARGETS_OBJS += ethtool_utils.o
 USER_TARGETS_OBJS += rule.o
 USER_TARGETS_OBJS += btf.o
 USER_TARGETS_OBJS += xsk_socket.o
+USER_TARGETS_OBJS += aho-corasick.o
+USER_TARGETS_OBJS += str2dfa.o
 
 # The USER_TARGETS_OBJS have a dependency of this header file
 USER_TARGETS_OBJS_DEPS += common_defines.h

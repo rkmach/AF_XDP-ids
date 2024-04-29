@@ -33,6 +33,5 @@ struct protocol_port_groups_t {
 };
 
 int str2dfa(struct fast_p* , size_t, struct dfa_struct *);
-int str2dfa__to_contents(char** , size_t, struct dfa_struct *);
 
 #endif
