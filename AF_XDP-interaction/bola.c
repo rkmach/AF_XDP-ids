@@ -158,6 +158,8 @@ static bool global_exit;
 
 struct xdp_hints_mark xdp_hints_mark = { 0 };
 
+struct port_group_t** port_groups[2];  // uma pra udp [0] e outra pra tcp [1]
+
 /*
 essa opção permite busy pool, porém a placa q temos não suporta
 static void __exit_with_error(int error, const char *file, const char *func,
@@ -195,28 +197,63 @@ static void apply_setsockopt(struct xsk_socket_info *xsk, bool opt_busy_poll,
 }
 */
 
+void find_remaining_contents(struct rule_t* rule, uint8_t *pkt, int offset, uint32_t len){
+    char* payload;
+    payload = (char*) (pkt + offset);
+    if(!payload || len <= offset)
+		return;
+
+	struct ids_inspect_map_key key;
+	struct ids_inspect_map_value* value;
+
+	key.padding = 0;
+	key.state = 0;
+
+	int count = 0;
+
+	// começa a procurar pelos demais padrões no autômato da regra
+    for(int i = 0; i<len-offset; i++){
+		printf("%c\n", *payload);
+		key.unit = *payload;
+		if (hashmap__find(&(rule->dfa), &key, (void **)&value)){
+			printf("transação de estado\n");
+			key.state = value->state;
+			if(value->flag > 0){
+				count++;
+			}
+			if(count >= rule->n_contents){
+				printf("Casou com a regra de sid %d!!!!!", rule->sid);
+				return;
+			}
+		}
+	}
+
+}
+
 // criar e lógica para receber as info de metadado
 // e pegar o autômato correto.
 void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
+
     int offset;
 	uint32_t global_map_index;
 	int16_t rule_index;
+	struct rule_t* rule;
+	struct port_group_t** this_port_groups;
+	struct port_group_t* specific_pg;
 
     offset = is_tcp(pkt, &xdp_hints_mark, &global_map_index, &rule_index) ? 54 : 42;
-
-	// printf("rule_index = %d", rule_index);
-
-    char* first_char_payload = NULL;
-    first_char_payload = (char*) pkt + offset;
-    if (!first_char_payload)
-        return;
-    if (len > offset) {
-        for(int i = 0; i<len-offset; i++){
-            printf("%c\n", *first_char_payload);
-            first_char_payload++;
-        }
-    }
+	if(offset == 54){  // tcp
+		this_port_groups = port_groups[1];
+		specific_pg = this_port_groups[global_map_index];
+		rule = specific_pg->rules[rule_index];
+		// se a regra não tem nenhum content, já casou!!
+		if(rule->n_contents == 0){
+			printf("Casou com a regra de sid %d!!!!!", rule->sid);
+			return;
+		}
+		find_remaining_contents(rule, pkt, offset, len);
+	}
 }
 
 void handle_receive_packets(struct xsk_socket_info* xsk_info){
@@ -306,7 +343,7 @@ void rx_and_process(struct config* config, struct xsk_socket_info** xsk_sockets,
         }
         for(i_queue = 0; i_queue < n_queues; i_queue++){
             if(fds[i_queue].revents & POLLIN){
-                printf("recebi na fila %d", i_queue);
+                printf("recebi na fila %d\n", i_queue);
                 handle_receive_packets(xsk_sockets[i_queue]);
             }
         }
@@ -450,10 +487,10 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
     /* In this moment, every pattern in the port group has been collected, so it's possible to create dfas */
 	str2dfa(fast_patterns_array, len_fp_arr, &dfa);
 
-    for(int k = 0; k < dfa.entry_number; k++){
-        printf("entries[%d]:  (%d, %c)  (%d, %d, %d)\n", k, dfa.entries[k].key_state, dfa.entries[k].key_unit, 
-			dfa.entries[k].value_state, dfa.entries[k].value_flag, dfa.entries[k].fp__rule_index);
-    }
+    // for(int k = 0; k < dfa.entry_number; k++){
+    //     printf("entries[%d]:  (%d, %c)  (%d, %d, %d)\n", k, dfa.entries[k].key_state, dfa.entries[k].key_unit, 
+	// 		dfa.entries[k].value_state, dfa.entries[k].value_flag, dfa.entries[k].fp__rule_index);
+    // }
 
 	struct port_map_key key;
 	key.src_port = src;
@@ -774,6 +811,8 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_BPF;
 	}
     tcp_port_groups.n_port_groups = tcp_num_port_groups;
+
+	port_groups[1] = tcp_port_groups.port_groups_array;
 
 
 

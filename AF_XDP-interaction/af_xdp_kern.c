@@ -27,7 +27,7 @@ struct {
 
 #define PORT_RANGE 65536
 #define IDS_INSPECT_MAP_SIZE 65536
-#define IDS_INSPECT_DEPTH 10
+#define IDS_INSPECT_DEPTH 50
 #define IDS_INSPECT_STRIDE 1
 
 struct ids_map {
