@@ -513,7 +513,7 @@ void create_port_groups(struct port_group_t*** this_port_groups, const char* rul
 
 		if(pgs_index >= M){
 			M = M + 100;
-			current_port_group->rules = (struct rule_t**)realloc(current_port_group->rules, sizeof(struct rule_t*)*M);
+			*this_port_groups = (struct port_group_t**)realloc(*this_port_groups, sizeof(struct port_group_t*)*M);
 		}
 
     	current_port_group->n_rules = 0;
