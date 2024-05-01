@@ -615,42 +615,6 @@ void destroy_port_groups(struct protocol_port_groups_t* protocol_port_group){
 	free(protocol_port_group->port_groups_array);
 }
 
-int pin_maps_in_bpf_object(struct bpf_object *bpf_obj, struct config *cfg, const char* pin_basedir)
-{
-	char map_filename[1024];
-	int err, len;
-
-	len = snprintf(map_filename, 1024, "%s/%s/%s",
-		       pin_basedir, cfg->ifname, "map_name");
-	if (len < 0) {
-		fprintf(stderr, "ERR: creating map_name\n");
-		return EXIT_FAIL_OPTION;
-	}
-
-	/* Existing/previous XDP prog might not have cleaned up */
-	if (access(map_filename, F_OK ) != -1 ) {
-		if (verbose)
-			printf(" - Unpinning (remove) prev maps in %s/\n",
-			       cfg->pin_dir);
-
-		/* Basically calls unlink(3) on map_filename */
-		err = bpf_object__unpin_maps(bpf_obj, cfg->pin_dir);
-		if (err) {
-			fprintf(stderr, "ERR: UNpinning maps in %s\n", cfg->pin_dir);
-			return EXIT_FAIL_BPF;
-		}
-	}
-	if (verbose)
-		printf(" - Pinning maps in %s/\n", cfg->pin_dir);
-
-	/* This will pin all maps in our bpf_object */
-	err = bpf_object__pin_maps(bpf_obj, cfg->pin_dir);
-	if (err)
-		return EXIT_FAIL_BPF;
-
-	return 0;
-}
-
 
 int main(int argc, char **argv)
 {

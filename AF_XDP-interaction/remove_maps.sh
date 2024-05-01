@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Directory to delete files from
-directory="/sys/fs/bpf/amigo"
+directory="/sys/fs/bpf/$1"
 
 # Check if the directory exists
 if [ -d "$directory" ]; then

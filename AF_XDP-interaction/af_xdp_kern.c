@@ -49,7 +49,7 @@ struct global_map_t {
                 &ids_map6,
                 &ids_map7,
                 &ids_map8 }
-};
+}, global1_map SEC(".maps");
 
 struct port_map_t {
     __uint(type, BPF_MAP_TYPE_HASH);
