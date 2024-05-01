@@ -17,4 +17,6 @@ int open_bpf_map_file(const char *pin_dir,
 		      const char *mapname,
 		      struct bpf_map_info *info);
 
+int set_tail_call_map(struct bpf_object *bpf_obj, struct config *cfg);
+
 #endif /* __COMMON_USER_BPF_XDP_H */

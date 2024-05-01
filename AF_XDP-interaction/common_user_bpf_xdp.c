@@ -384,3 +384,39 @@ int open_bpf_map_file(const char *pin_dir,
 
 	return fd;
 }
+
+/* Set entries for tail-call map */
+int set_tail_call_map(struct bpf_object *bpf_obj, struct config *cfg)
+{
+	int i_entry, n_entry;
+	int tail_call_map_fd, map_idx, prog_fd;
+	struct bpf_program *bpf_prog;
+
+	tail_call_map_fd = open_bpf_map_file(cfg->pin_dir, cfg->tail_call_map_name, NULL);
+	if (tail_call_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+
+	n_entry = cfg->tail_call_map_entry_count;
+
+	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+		map_idx = cfg->tail_call_map_idx[i_entry];
+		bpf_prog = bpf_object__find_program_by_name(
+			bpf_obj, cfg->tail_call_map_progsec[i_entry]);
+		if (!bpf_prog) {
+			fprintf(stderr,
+				"ERR: couldn't find a program in ELF section '%s'\n",
+				cfg->tail_call_map_progsec[i_entry]);
+			return EXIT_FAIL_BPF;
+		}
+		prog_fd = bpf_program__fd(bpf_prog);
+		if (bpf_map_update_elem(tail_call_map_fd, &map_idx, &prog_fd, 0) < 0) {
+			fprintf(stderr,
+				"WARN: Failed to update bpf map (tail_call_map) : err(%d):%s\n",
+				errno, strerror(errno));
+			return EXIT_FAIL_BPF;
+		}
+	}
+
+	return 0;
+}

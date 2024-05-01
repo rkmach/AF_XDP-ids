@@ -402,7 +402,7 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 				errno, strerror(errno));
 			return -1;
 		} else {
-			if (true) {
+			if (false) {
 				printf("---------------------------------------------------\n");
 				// printf("New element is added in to map (%s)\n",
 				// 		ids_inspect_map_name);
@@ -456,7 +456,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 
     // pega o mapa correto e adiciona o DFA recém criado
     sprintf(map_name, "ids_map%d", *index);
-    printf("\nColocando esse automato no mapa %s\n", map_name);
+    // printf("\nColocando esse automato no mapa %s\n", map_name);
     int ids_map_fd = open_bpf_map_file(pin_dir, map_name, NULL);
     if (ids_map_fd < 0) {
         fprintf(stderr,
@@ -660,6 +660,7 @@ int main(int argc, char **argv)
 		.xsk_if_queue = -1,
 		.interval = DEFAULT_INTERVAL,
 		.batch_pkts = BATCH_PKTS_DEFAULT,
+		.tail_call_map_name = "tail_call_map",
 	};
 	struct xsk_umem_info **umems;
 	struct xsk_socket_info **xsk_sockets;
@@ -695,9 +696,16 @@ int main(int argc, char **argv)
     
     pin_maps_in_bpf_object(bpf_obj, &cfg, pin_basedir);
 
+	int err;
+
+	err = set_tail_call_map(bpf_obj, &cfg);
+	if (err) {
+		fprintf(stderr, "ERR: setting tail call map\n");
+		return err;
+	}
 
     // inicia as estruturas BTF
-    int err = init_btf_info_via_bpf_object(bpf_obj, &xdp_hints_mark);
+    err = init_btf_info_via_bpf_object(bpf_obj, &xdp_hints_mark);
 	if (err) {
 		fprintf(stderr, "ERROR(%d): Invalid BTF info: errno:%s\n",
 			err, strerror(errno));

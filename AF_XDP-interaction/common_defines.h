@@ -24,6 +24,12 @@ struct config {
 	__u16 xsk_bind_flags;
 	int xsk_if_queue;
 	bool xsk_wakeup_mode;
+	
+	char tail_call_map_name[32];
+	int tail_call_map_entry_count;
+	int tail_call_map_idx[32];
+	char tail_call_map_progsec[32][32];
+
 	/* Real-Time scheduler setting */
 	int sched_prio;
 	int sched_policy;

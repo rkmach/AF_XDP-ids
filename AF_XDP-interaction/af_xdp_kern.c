@@ -18,17 +18,11 @@ struct {
 	__uint(value_size, sizeof(int));
 } xsks_map SEC(".maps");
 
-// struct {
-// 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-// 	__type(key, __u32);
-// 	__type(value, __u32);
-// 	__uint(max_entries, MAX_AF_SOCKS);
-// } xdp_stats_map SEC(".maps");
-
 #define PORT_RANGE 65536
 #define IDS_INSPECT_MAP_SIZE 65536
-#define IDS_INSPECT_DEPTH 50
+#define IDS_INSPECT_DEPTH 1520  // MTU 1500 bytes
 #define IDS_INSPECT_STRIDE 1
+#define TAIL_CALL_MAP_SIZE 2
 
 struct ids_map {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -61,23 +55,14 @@ struct port_map_t {
     __type(value, __u32);
 } tcp_port_map SEC(".maps"), udp_port_map SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+    __uint(max_entries, TAIL_CALL_MAP_SIZE);
+    __type(key, __u32);
+    __type(value, __u32);
+} tail_call_map SEC(".maps");
 
-/*
- * The xdp_hints_xxx struct's are stored in the XDP 'data_meta' area,
- * which is located just in-front-of the raw packet payload data.
- *
- * Explaining the struct attribute's:
- * ----------------------------------
- * The struct must be 4 byte aligned (kernel requirement), which here
- * is enforced by the struct __attribute__((aligned(4))).
- *
- * To avoid any C-struct padding attribute "packed" is used.
- *
- * NOTICE: Do NOT define __attribute__((preserve_access_index)) here,
- * as libbpf will try to find a matching kernel data-structure,
- * e.g. it will cause BPF-prog loading step to fail (with invalid func
- * unknown#195896080 which is 0xbad2310 in hex for "bad relo").
- */
+// os 4 primeiros campos foram registrados em seções BTF. Os últimos 3 são somente para tail call
 struct xdp_hints_mark {
 	__u32 mark;
     __u32 global_map_index;
@@ -85,52 +70,78 @@ struct xdp_hints_mark {
 	__u32 btf_id;
 } __attribute__((aligned(4))) __attribute__((packed));
 
-struct xdp_hints_rx_time {
-	__u64 rx_ktime;
-	__u32 xdp_rx_cpu;
-	__u32 btf_id;
-} __attribute__((aligned(4))) __attribute__((packed));
 
-static __always_inline void inspect_payload(struct ids_map* ids_inspect_map, int is_tcp, struct hdr_cursor *nh, void *data_end,
-        __u32 queue_idx, __u32* action, struct xdp_hints_mark* meta)
+SEC("xdp")
+int xdp_inspect_payload(struct xdp_md *ctx)
 {
-        ids_inspect_unit *ids_unit;
-        struct ids_inspect_map_key ids_map_key;
-        struct ids_inspect_map_value *ids_map_value;
-        int i;
 
-        ids_map_key.state = 0;
-        ids_map_key.padding = 0;
+    void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data_meta = (void *)(long)ctx->data_meta;
+	struct xdp_hints_mark *meta = data_meta;
+	struct hdr_cursor nh;
+    __u32 rx_queue_index = ctx->rx_queue_index;
+	
+	/* Compute current packet pointer */
 
-        #pragma unroll
-        for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
-            ids_unit = nh->pos;
-            if (ids_unit + 1 > data_end) {
-                /* Reach the last byte of the packet */
-                return;
-            }
-            ids_map_key.unit = *ids_unit;
-            ids_map_value = bpf_map_lookup_elem(ids_inspect_map, &ids_map_key);
-            if (ids_map_value) {
-                bpf_printk("%d %d\n", ids_map_key.state, ids_map_value->state);
-                /* Go to the next state according to DFA */
-                ids_map_key.state = ids_map_value->state;
-                if (ids_map_value->flag > 0) {
-                    bpf_printk("rule_index = %d\n", ids_map_value->fp__rule_index);
-                    /* An acceptable state, return the hit pattern number */
-                    meta->rule_index = ids_map_value->fp__rule_index;
-                    meta->mark = is_tcp;
-                    meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
+	if (meta + 1 > data) {
+		return XDP_ABORTED;
+	}
 
-                    *action = bpf_redirect_map(&xsks_map, queue_idx, 0);
-                }
-            }
-            /* Prepare for next scanning */
-            nh->pos += 1;
+    __u32 mark;
+    if(meta->mark == 54){
+        mark = 54;
+    }
+    else{
+        mark = 42;
+    }
+
+	nh.pos = data;
+
+    if (nh.pos + mark > data_end)
+        return XDP_DROP;
+    nh.pos += mark;
+
+    ids_inspect_unit *ids_unit;
+    struct ids_inspect_map_key ids_map_key;
+    struct ids_inspect_map_value *ids_map_value;
+    int i;
+
+    __u32 global_map_index = meta->global_map_index;
+    struct ids_map* ids_inspect_map = bpf_map_lookup_elem(&global_map, &global_map_index);
+    if(!ids_inspect_map)
+        return XDP_DROP;
+
+    ids_map_key.state = 0;
+    ids_map_key.padding = 0;
+    #pragma unroll
+    for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+        ids_unit = nh.pos;
+        if (ids_unit + 1 > data_end) {
+            /* Reach the last byte of the packet (None fast pattern was found. Drop packet) */
+            return XDP_DROP;
         }
+        ids_map_key.unit = *ids_unit;
+        ids_map_value = bpf_map_lookup_elem(ids_inspect_map, &ids_map_key);
+        if (ids_map_value) {
+            bpf_printk("%d %d\n", ids_map_key.state, ids_map_value->state);
+            /* Go to the next state according to DFA */
+            ids_map_key.state = ids_map_value->state;
+            if (ids_map_value->flag > 0) {
+                bpf_printk("rule_index = %d\n", ids_map_value->fp__rule_index);
+                /* An acceptable state, return the hit pattern number */
+                meta->rule_index = ids_map_value->fp__rule_index;
+                meta->btf_id = bpf_core_type_id_local(struct xdp_hints_mark);
 
-        /* The payload is not inspected completely (!!!!!!!!!!!!!!!!!!!!)*/
-        return;
+                return bpf_redirect_map(&xsks_map, rx_queue_index, 0);
+            }
+        }
+        /* Prepare for next scanning */
+        nh.pos += 1;
+    }
+
+    /* The payload is not inspected completely (!!!!!!!!!!!!!!!!!!!!)*/
+    return XDP_DROP;
 }
 
 SEC("xdp")
@@ -145,7 +156,6 @@ int xdp_ids_func(struct xdp_md *ctx)
 		return XDP_DROP;
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
-    __u32 rx_queue_index = ctx->rx_queue_index;
 
     meta = (void *)(unsigned long)ctx->data_meta;
     if (meta + 1 > data) /* Verify meta area is accessible */
@@ -265,62 +275,18 @@ int xdp_ids_func(struct xdp_md *ctx)
     }
 pg_found:
     bpf_printk("port_map_value = %d", *port_map_value);
-    struct ids_map* map = bpf_map_lookup_elem(&global_map, port_map_value);
-    if(map){
-        meta->global_map_index = *port_map_value;
-        inspect_payload(map, is_tcp, &nh, data_end, rx_queue_index, &action, meta);
-    }
-    else
-        action = XDP_DROP;
+    /* Only packet with valid TCP/UDP header and a valid port group will reach here */
+    
+    meta->global_map_index = *port_map_value;
+    meta->mark = is_tcp;
+
+    // Must use tail call, otherwise the instruction limit would be crossed.
+    bpf_tail_call(ctx, &tail_call_map, 0);
+    // The flow shoud had been deviated by the above line. If it was not, drop the packet
+    action = XDP_DROP;
 
 out:
     return action;
 }
-
-// SEC("xdp")
-// int xdp_sock_prog(struct xdp_md *ctx)
-// {
-// 	bpf_printk("AAAAA");
-// 	int index = ctx->rx_queue_index;
-// 	__u32 *pkt_count;
-// 	int err, ret;
-
-// 	pkt_count = bpf_map_lookup_elem(&xdp_stats_map, &index);
-// 	if (!pkt_count)
-// 		return XDP_ABORTED;
-// 	__u64 cnt = (*pkt_count)++;
-// //	if (cnt == 0) {
-// //		if (bpf_ktime_get_ns() == 42)
-// //			return XDP_ABORTED;
-// //		cnt++;
-// //	}
-
-// 	/* Notice how two different xdp_hints meta-data are used */
-// 	if ((cnt % 2) == 0) {
-// 		err = meta_add_rx_time(ctx);
-// 		if (err < 0)
-// 			return XDP_ABORTED;
-// 	} else {
-// 		err = meta_add_mark(ctx, 42);
-// 		if (err < 0)
-// 			return XDP_DROP;
-// 	}
-
-// 	/* Let network stack handle ARP and IPv6 Neigh Solicitation */
-// 	ret = 3;
-// 	if (ret < 0)
-// 		return XDP_ABORTED;
-// 	if (ret == 1)
-// 		return XDP_PASS;
-
-// 	/* A set entry here means that the correspnding queue_id
-// 	 * has an active AF_XDP socket bound to it. */
-// 	if (bpf_map_lookup_elem(&xsks_map, &index)){
-// 		bpf_printk("Mandando pru userland");
-// 		return bpf_redirect_map(&xsks_map, index, 0);
-// 	}
-
-// 	return XDP_PASS;
-// }
 
 char _license[] SEC("license") = "GPL";
