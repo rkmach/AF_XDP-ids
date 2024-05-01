@@ -237,17 +237,17 @@ void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	struct port_group_t* specific_pg;
 
     offset = is_tcp(pkt, &xdp_hints_mark, &global_map_index, &rule_index) ? 54 : 42;
-	if(offset == 54){  // tcp
-		this_port_groups = port_groups[1];
-		specific_pg = this_port_groups[global_map_index];
-		rule = specific_pg->rules[rule_index];
-		// se a regra não tem nenhum content, já casou!!
-		if(rule->n_contents == 0){
-			printf("Casou com a regra de sid %d!!!!!", rule->sid);
-			return;
-		}
-		find_remaining_contents(rule, pkt, offset, len);
+	
+	this_port_groups = port_groups[0];
+	
+	specific_pg = this_port_groups[global_map_index];
+	rule = specific_pg->rules[rule_index];
+	// se a regra não tem nenhum content, já casou!!
+	if(rule->n_contents == 0){
+		printf("Casou com a regra de sid %d!!!!!", rule->sid);
+		return;
 	}
+	find_remaining_contents(rule, pkt, offset, len);
 }
 
 void handle_receive_packets(struct xsk_socket_info* xsk_info){
@@ -456,7 +456,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 
     // pega o mapa correto e adiciona o DFA recém criado
     sprintf(map_name, "ids_map%d", *index);
-    // printf("\nColocando esse automato no mapa %s\n", map_name);
+    printf("\nColocando esse automato no mapa %s  (%d, %d)\n", map_name, src, dst);
     int ids_map_fd = open_bpf_map_file(pin_dir, map_name, NULL);
     if (ids_map_fd < 0) {
         fprintf(stderr,
@@ -475,7 +475,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 }
 
 // criar um port_group para cada linha do arquivo
-struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int global_map_fd, int port_map_fd){
+void create_port_groups(struct port_group_t*** this_port_groups, const char* rules_file, int* n_pgs, int global_map_fd, int port_map_fd){
 	char line[1024];
 	FILE *file;
 	char* token, *aux_token;
@@ -483,7 +483,7 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 	char* subtoken, *aux_subtoken;
 	struct port_group_t* current_port_group;
 	struct rule_t* rule;
-	int rule_index = 0, pgs_index = 0;
+	int rule_index = 0, pgs_index = *n_pgs;
 	uint32_t sid;
 	int M = 500;
 	int N = 500;
@@ -497,9 +497,15 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 	file = fopen(rules_file, "r");
 	if (file == NULL) {
 		printf("Error opening file!\n");
-		return NULL;
+		return;
 	}
-	struct port_group_t** port_groups = (struct port_group_t**)malloc(sizeof(struct port_group_t*)*M);
+	if(*this_port_groups == NULL){
+		*this_port_groups = (struct port_group_t**)malloc(sizeof(struct port_group_t*)*M);
+		if(*this_port_groups == NULL){
+			printf("Error allocating memory!\n");
+			return;
+		}
+	}
 
 	while(fgets(line, 1024, file)){
 		token = __strtok_r(line, "~", &aux_token);  // these are the src and dst ports
@@ -579,7 +585,7 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 
 			token = __strtok_r(NULL, "~", &aux_token);
 		}
-    	port_groups[pgs_index] = current_port_group;
+    	(*this_port_groups)[pgs_index] = current_port_group;
   		rule_index = 0;
 
         if (initialize_fast_pattern_port_group_map(port_map_fd, &pgs_index, current_port_group->src_port,
@@ -587,7 +593,7 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
             fprintf(stderr,
                 "WARN: Failed to update bpf map file: err(%d):%s\n",
                 errno, strerror(errno));
-            return NULL;
+            return;
         }
 		pgs_index++;
 		index_fp = 0;
@@ -596,7 +602,6 @@ struct port_group_t** create_port_groups(const char* rules_file, int* n_pgs, int
 	// py_finalize();
     fclose(file);
 	*n_pgs = pgs_index;
-	return port_groups;
 }
 
 void destroy_port_groups(struct protocol_port_groups_t* protocol_port_group){
@@ -652,7 +657,6 @@ int main(int argc, char **argv)
 	int xsks_map_fd;
 	struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
 	struct config cfg = {
-		.ifindex   = 6,  // iface amigo
 		.do_unload = false,
 		.filename = "af_xdp_kern.o",
 		.progsec = "xdp",
@@ -733,22 +737,33 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_BPF;
 	}
 
-	int tcp_num_port_groups;
-	struct protocol_port_groups_t tcp_port_groups;
-    const char* tcp_fast_patterns_with_sid_file_name = "./patterns/tcp-fp_with_sid.txt";
-	tcp_port_groups.port_groups_array = create_port_groups(tcp_fast_patterns_with_sid_file_name, &tcp_num_port_groups,
-        global_map_fd, tcp_port_map_fd);
-    if (!tcp_port_groups.port_groups_array ) {
+
+	// haverá um vetor de grupos de portas, contendo os fast patterns de TCP e UDP
+	// representação fiel do mapa global_map
+	int num_port_groups = 0;
+	struct protocol_port_groups_t port_groups_array;
+	struct port_group_t** pg_array = NULL;
+    const char* udp_fast_ptts = "./patterns/udp-fp_with_sid.txt";
+	create_port_groups(&pg_array, udp_fast_ptts, &num_port_groups,
+        global_map_fd, udp_port_map_fd);
+    if (pg_array == NULL) {
+		printf("Não alocou memória pra o vetor de grupos. Saindo.");
 		return EXIT_FAIL_BPF;
 	}
-    tcp_port_groups.n_port_groups = tcp_num_port_groups;
+	const char* tcp_fast_ptts = "./patterns/tcp-fp_with_sid.txt";
+	create_port_groups(&pg_array, tcp_fast_ptts, &num_port_groups,
+        global_map_fd, tcp_port_map_fd);
 
-	port_groups[1] = tcp_port_groups.port_groups_array;
+	port_groups_array.port_groups_array = pg_array;
+	port_groups_array.n_port_groups = num_port_groups;
+
+	printf("port_groups_array size = %ld\n", port_groups_array.n_port_groups);
+
+	port_groups[0] = port_groups_array.port_groups_array;
 
 
 
-
-    /* --- In this moment, every possible DFA has been filled --- */
+    /* --- At this moment, every possible DFA has been filled. Go handle XSKS --- */
 
     /* We also need to load the xsks_map */
     map = bpf_object__find_map_by_name(bpf_obj, "xsks_map");
@@ -780,6 +795,8 @@ int main(int argc, char **argv)
     /* fill xsks map */
     enter_xsks_into_map(xsks_map_fd, xsk_sockets, n_queues);
 
+	/* -- XSKS sockets properly configurated. Go wait for packets --*/
+
     rx_and_process(&cfg, xsk_sockets, n_queues);
 
     /* Cleanup */
@@ -789,7 +806,7 @@ int main(int argc, char **argv)
 	}
     free(umems);
     free(xsk_sockets);
-    destroy_port_groups(&tcp_port_groups);
+    destroy_port_groups(&port_groups_array);
     xdp_link_detach(cfg.ifindex, cfg.xdp_flags, 0);
     return 0;
 }

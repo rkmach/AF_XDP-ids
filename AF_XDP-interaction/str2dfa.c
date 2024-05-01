@@ -55,7 +55,11 @@ int str2dfa(struct fast_p* fast_patterns_array, size_t p_len, struct dfa_struct 
 	write_strings_to_file("data.txt", fps, p_len);
 
 	// chama python script para criar o automato
-	system("python3 str2dfa.py data.txt > pats.txt");
+	int err = system("python3 str2dfa.py data.txt > pats.txt");
+    if (err < 0){
+        fprintf(stderr, "Error creating dfa.\n");
+        return 1;
+    }
 
 	int n_entry = get_num_lines("pats.txt");
 

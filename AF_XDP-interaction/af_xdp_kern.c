@@ -31,6 +31,9 @@ struct ids_map {
     __type(value, struct ids_inspect_map_value);
 } ids_map0 SEC(".maps"), ids_map1 SEC(".maps"), ids_map2 SEC(".maps"), ids_map3 SEC(".maps"), ids_map4 SEC(".maps"), ids_map5 SEC(".maps"), ids_map6 SEC(".maps"), ids_map7 SEC(".maps"), ids_map8 SEC(".maps");
 
+// I really wish it were possible to do something like the line bellow
+// struct ids_map mapas[200] SEC(".maps");
+
 struct global_map_t {
     __uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
     __type(key, __u32);
@@ -89,12 +92,13 @@ int xdp_inspect_payload(struct xdp_md *ctx)
 	}
 
     __u32 mark;
-    if(meta->mark == 54){
+    if(meta->mark == 1){  // is TCP?
         mark = 54;
     }
     else{
         mark = 42;
     }
+    bpf_printk("mark = %d\n", mark);
 
 	nh.pos = data;
 
@@ -270,7 +274,8 @@ int xdp_ids_func(struct xdp_md *ctx)
 
         if(!port_map_value)
             return XDP_DROP;
-    } else {
+    } 
+    else {
             goto out;
     }
 pg_found:
