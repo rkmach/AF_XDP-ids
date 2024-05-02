@@ -476,7 +476,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 
 // criar um port_group para cada linha do arquivo
 void create_port_groups(struct port_group_t*** this_port_groups, const char* rules_file, int* n_pgs, int global_map_fd, int port_map_fd){
-	char line[1024];
+	char line[4096];
 	FILE *file;
 	char* token, *aux_token;
 	char* inner_token, *aux_inner_token, *src_port, *dst_port;
@@ -507,7 +507,7 @@ void create_port_groups(struct port_group_t*** this_port_groups, const char* rul
 		}
 	}
 
-	while(fgets(line, 1024, file)){
+	while(fgets(line, 4096, file)){
 		token = __strtok_r(line, "~", &aux_token);  // these are the src and dst ports
 		current_port_group = (struct port_group_t*)malloc(sizeof(struct port_group_t));
 
