@@ -12,26 +12,8 @@ class DFAMatchEntriesGenerator():
         self.table_id = table_id
         self.pattern_list = pattern_list
         self.automaton = ahocorasick.Automaton(ahocorasick.STORE_LENGTH)
-        with open('pattern_id.txt', 'w') as the_file:
-            if type(pattern_list) == list:
-                for pattern in pattern_list:
-                    self.automaton.add_word(pattern)
-                    pattern_number += 1
-                    to_file = str(pattern) + ' ' + str(pattern_number) + '\n'
-                    the_file.write(to_file)
-                # print("\nTotal %d patterns loaded\n" % pattern_number)
-            elif type(pattern_list) == str:
-                pattern_file = open(pattern_list, 'r')
-                for pattern in pattern_file.readlines():
-                    pattern = pattern[:-1]
-                    print("Get pattern of length %d: %s" % (len(pattern), pattern))
-                    self.automaton.add_word(pattern)
-                    pattern_number += 1
-                    to_file = str(pattern) + ' ' + str(pattern_number) + '\n'
-                    the_file.write(to_file)
-                # print("\nTotal %d patterns loaded from file %s\n" % \
-                #     (pattern_number, pattern_list))
-            the_file.close()
+        for pattern in pattern_list:
+            self.automaton.add_word(pattern)
         self.automaton.make_automaton()
         # Generate DFA descriptor according to the automaton
         self.dfa = self.generate_dfa(self.automaton.dump())
@@ -163,6 +145,26 @@ class DFAMatchEntriesGenerator():
             else:
                 continue
     
+    def acha_padrao(self, edges, final_state):
+        # import pdb; pdb.set_trace()
+        type_1_edges = []
+        for (current_state, received_chars, next_state, type) in edges:
+            if type == 1:
+                type_1_edges.append((current_state, received_chars, next_state, type))
+
+        type_1_edges = type_1_edges[::-1]
+        padrao = ''
+        
+        while True:
+            for (current_state, received_chars, next_state, type) in type_1_edges:
+                if current_state == 0 and next_state == final_state:
+                    padrao += received_chars.decode('utf-8')
+                    return padrao
+                if next_state == final_state:
+                    padrao += received_chars.decode('utf-8')
+                    final_state = current_state
+                    break
+
     def generate_mat_entries(self, msdfa_descriptor):
         msdfa_nodes = msdfa_descriptor[0]
         msdfa_edges = msdfa_descriptor[1]
@@ -175,8 +177,8 @@ class DFAMatchEntriesGenerator():
             if msdfa_nodes[next_state] != 0:
                 modifier = cont
                 cont += 1
-                matched_pattern = self.pattern_list[msdfa_nodes[next_state] - 1]
-            action_params = (next_state, modifier, matched_pattern)
+                matched_pattern = self.acha_padrao(msdfa_edges, next_state)
+            action_params = (next_state, modifier, matched_pattern[::-1])
             mat_entries.append((match, action_params))
         return mat_entries
 

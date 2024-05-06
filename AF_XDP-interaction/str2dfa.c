@@ -15,11 +15,11 @@ void write_strings_to_file(const char *filename, char **strings, int num_strings
         return;
     }
 
-	printf("Patterns:\n");
+	// printf("Patterns:\n");
 
     // Write each string to the file line by line
     for (int i = 0; i < num_strings; i++) {
-		printf("%s\n", strings[i]);
+		// printf("%s\n", strings[i]);
         fprintf(file, "%s\n", strings[i]);
     }
 
@@ -46,9 +46,12 @@ int get_num_lines(const char *filename){
 // essa função recebe o automato recém alocado e o arquivo que representa o autômato. Inicia os campos entries e entry_number do dfa
 int str2dfa(struct fast_p* fast_patterns_array, size_t p_len, struct dfa_struct *result) {
 
+    // printf("Todos os FPs enviados:\n");
+
     char* fps[p_len];
 	for(int i = 0; i < p_len; i++){
 		fps[i] = fast_patterns_array[i].fp;
+        // printf("%s\n", fps[i]);
 	}
 
 	// escreve os fast pattern linha a linha no arquivo data.txt
@@ -89,11 +92,17 @@ int str2dfa(struct fast_p* fast_patterns_array, size_t p_len, struct dfa_struct 
 		entries[i].value_state = (uint16_t)value_s;
 		entries[i].value_flag = (uint16_t)value_f;
 
+        // printf("padrão do pats ==> %s\n", padrao);
+
         if(strcmp(padrao, "~") != 0){
             for(j = 0; j < p_len; j++){
                 if(strcmp(padrao, fast_patterns_array[j].fp) == 0){
+                    // printf("%s --> %d\n\n", padrao, j);
                     entries[i].fp__rule_index = j;  // coloca o índice do vetor de regras para este port group
+                    break;
                 }
+                // printf("FP = %s\n", padrao);
+                entries[i].fp__rule_index = -1;  // significa que não é um estado final
             }
         }
         else{
@@ -108,3 +117,5 @@ int str2dfa(struct fast_p* fast_patterns_array, size_t p_len, struct dfa_struct 
     fclose(file);			
 	return 0;
 }
+
+// any;8300~/uu/frpc.tar.gz;50292~NM_A_SZ_TRANSACTION_ID;21915~/Mac/getInstallScript/;41460;clickid=,software=~/IMManager/Admin/IMAdminSystemDashboard.asp;21066;refreshRateSetting=~/online.php?c=;41331;&u=,&p=,&hi=~act=search;16614;submit=~NM_A_PARM1;21916~/gt.jpg?;37733;=,bytes=6433-~/post.php;40238;type=,hwid=,pcname=,username=,password=~/createsearch;29753;POST,cmd=0,val=,type=9~/ApmAdminServices/;35279;haid,Content-Disposition~/newera/walkthisland/greenland.php;39968~/proxy.cgi;46515;url=,%26~/appliancews/getLicense;40837;hostName=,%26~/sms.php?apelido=;53750;/controls/

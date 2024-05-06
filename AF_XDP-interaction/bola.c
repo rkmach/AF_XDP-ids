@@ -218,7 +218,9 @@ void find_remaining_contents(struct rule_t* rule, uint8_t *pkt, int offset, uint
 	for (res = ac_search_first(&ac, &(rule->dfa), payload);res.word != NULL; res = ac_search_next(&ac)) {
 		count++;
 		if(count >= rule->n_contents){
-			printf("Casou com a regra de sid %d!!!!!\n", rule->sid);
+			FILE* log = fopen("ids.log", "a");
+			fprintf(log, "(Com contents) Casou com a regra de sid %d!!!!!\n", rule->sid);
+			fclose(log);
 			return;
 		}
 	}
@@ -244,7 +246,9 @@ void process_packet(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len){
 	rule = specific_pg->rules[rule_index];
 	// se a regra não tem nenhum content, já casou!!
 	if(rule->n_contents == 0){
-		printf("Casou com a regra de sid %d!!!!!", rule->sid);
+		FILE* log = fopen("ids.log", "a");
+		fprintf(log, "(Só o FP) Casou com a regra de sid %d!!!!!\n", rule->sid);
+		fclose(log);
 		return;
 	}
 	find_remaining_contents(rule, pkt, offset, len);
@@ -476,7 +480,7 @@ int initialize_fast_pattern_port_group_map(int port_map_fd, int* index, uint16_t
 
 // criar um port_group para cada linha do arquivo
 void create_port_groups(struct port_group_t*** this_port_groups, const char* rules_file, int* n_pgs, int global_map_fd, int port_map_fd){
-	char line[4096];
+	char line[8192];
 	FILE *file;
 	char* token, *aux_token;
 	char* inner_token, *aux_inner_token, *src_port, *dst_port;
@@ -507,7 +511,7 @@ void create_port_groups(struct port_group_t*** this_port_groups, const char* rul
 		}
 	}
 
-	while(fgets(line, 4096, file)){
+	while(fgets(line, 8192, file)){
 		token = __strtok_r(line, "~", &aux_token);  // these are the src and dst ports
 		current_port_group = (struct port_group_t*)malloc(sizeof(struct port_group_t));
 
