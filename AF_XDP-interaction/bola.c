@@ -93,7 +93,7 @@ static const struct option_wrapper long_options[] = {
 	 "Force zero-copy mode"},
 
 	{{"queue",	 required_argument,	NULL, 'Q' },
-	 "Configure single interface receive queue for AF_XDP"},
+	 "Configure number of queues to be used for AF_XDP"},
 
 	{{"priority",	 required_argument,	NULL, 'p' },
 	 "Setup real-time priority for process"},
@@ -629,7 +629,6 @@ int main(int argc, char **argv)
 		.filename = "af_xdp_kern.o",
 		.progsec = "xdp",
 		.xsk_wakeup_mode = true, /* Default, change via --spin */
-		.xsk_if_queue = -1,
 		.interval = DEFAULT_INTERVAL,
 		.batch_pkts = BATCH_PKTS_DEFAULT,
 		.tail_call_map_name = "tail_call_map",
@@ -744,7 +743,8 @@ int main(int argc, char **argv)
     }
 
     /* Configure and initialize AF_XDP sockets  (vetor de ponteiros!!) */
-    int n_queues = 1;
+    int n_queues = cfg.xsk_if_queue;
+	printf("Número de filas: %d\n\n", n_queues);
 
 	umems = (struct xsk_umem_info **)
 			malloc(sizeof(struct xsk_umem_info *) * n_queues);
