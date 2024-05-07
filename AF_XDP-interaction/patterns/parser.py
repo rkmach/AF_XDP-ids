@@ -88,25 +88,25 @@ if __name__ == "__main__":
             
     file.close()
   
-    for pair in tcp_src_port_any:
-        for key in tcp_port_groups:
-            if key[0] != "any" and key[1] == pair[1]:
-                tcp_port_groups[key] += tcp_port_groups[pair]
+    # for pair in tcp_src_port_any:
+    #     for key in tcp_port_groups:
+    #         if key[0] != "any" and key[1] == pair[1]:
+    #             tcp_port_groups[key] += tcp_port_groups[pair]
 
-    for pair in tcp_dst_port_any:
-        for key in tcp_port_groups:
-            if key[0] == pair[0] and key[1] != "any":
-                tcp_port_groups[key] += tcp_port_groups[pair]
+    # for pair in tcp_dst_port_any:
+    #     for key in tcp_port_groups:
+    #         if key[0] == pair[0] and key[1] != "any":
+    #             tcp_port_groups[key] += tcp_port_groups[pair]
 
-    for pair in udp_src_port_any:
-        for key in udp_port_groups:
-            if key[0] != "any" and key[1] == pair[1]:
-                udp_port_groups[key] += udp_port_groups[pair]
+    # for pair in udp_src_port_any:
+    #     for key in udp_port_groups:
+    #         if key[0] != "any" and key[1] == pair[1]:
+    #             udp_port_groups[key] += udp_port_groups[pair]
 
-    for pair in udp_dst_port_any:
-        for key in tcp_port_groups:
-            if key[0] == pair[0] and key[1] != "any":
-                udp_port_groups[key] += udp_port_groups[pair]
+    # for pair in udp_dst_port_any:
+    #     for key in tcp_port_groups:
+    #         if key[0] == pair[0] and key[1] != "any":
+    #             udp_port_groups[key] += udp_port_groups[pair]
 
     # for x in tcp_port_groups:
     #     print(f"{x}: {tcp_port_groups[x]}")
