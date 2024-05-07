@@ -2,7 +2,7 @@
 
 # USER_TARGETS   := af_xdp_user
 # USER_TARGETS   += btf_unit_test
-USER_TARGETS   := bola
+USER_TARGETS   := ids
 BPF_TARGETS    := af_xdp_kern
 BPF_TARGETS    += btf_unit_test_bpf
 
