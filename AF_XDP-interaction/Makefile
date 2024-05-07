@@ -3,7 +3,9 @@
 # USER_TARGETS   := af_xdp_user
 # USER_TARGETS   += btf_unit_test
 USER_TARGETS   := ids
+USER_TARGETS   += test_snort_user
 BPF_TARGETS    := af_xdp_kern
+BPF_TARGETS    += test_snort_kern
 BPF_TARGETS    += btf_unit_test_bpf
 
 # Define C-code objects USER_TARGETS needs
